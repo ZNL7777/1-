@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v44.0)",
+    page_title="IATF 审计转换工具 (v49.0)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -97,7 +97,7 @@ def generate_json_logic(excel_file, base_data, user_data):
 
     # ================= 2. 数据提取 =================
     
-    # [姓名]
+    # [姓名提取与处理逻辑]
     raw_name_full = find_val_by_key(db_df, ["姓名", "Auditor Name"]) or get_db_val(5, 1)
     raw_name = raw_name_full.replace("姓名:", "").replace("Name:", "").strip() if raw_name_full else ""
     auditor_name = raw_name
@@ -128,7 +128,7 @@ def generate_json_logic(excel_file, base_data, user_data):
                         if len(auditor_id) > 4: break
             if auditor_id and len(auditor_id) > 4: break
 
-    # [日期]
+    # [审核与结果日期：这些保持严格 ISO 格式]
     start_date_raw = find_val_by_key(db_df, ["审核开始日期", "审核开始时间"]) or get_db_val(2, 1)
     end_date_raw = find_val_by_key(db_df, ["审核结束日期", "审核结束时间"]) or get_db_val(3, 1)
     
@@ -149,44 +149,123 @@ def generate_json_logic(excel_file, base_data, user_data):
         if pd.notna(end_dt): next_audit_iso = (end_dt + timedelta(days=45)).strftime('%Y-%m-%d') + "T00:00:00.000Z"
     except: pass
 
-    # [顾客与 CSR]
-    customer_name = find_val_by_key(db_df, ["顾客", "客户名称"]) or get_db_val(29, 1)
-    supplier_code = find_val_by_key(db_df, ["供应商编码", "供应商代码"]) or get_db_val(30, 1)
-    csr_name = find_val_by_key(db_df, ["CSR文件名称"]) or get_db_val(31, 1)
-    csr_date_raw = find_val_by_key(db_df, ["CSR文件日期"]) or get_db_val(32, 1)
-    csr_date = fmt_iso(csr_date_raw)
-
-    # 💥 [中英文地址分离与智能提取（破案修复版）]
-    def is_chinese(s): return bool(re.search(r'[\u4e00-\u9fff]', s))
-    
-    native_street = ""
-    english_address = ""
-
-    # 1. 优先扫描信息表（不会被其他变量干扰提前中断）
+    # 💥 [多顾客与 CSR 动态提取：原样保留日期文本]
+    customers_list = []
     if not info_df.empty:
+        header_r = -1
+        col_map = {'cust': -1, 'name': -1, 'date': -1, 'code': -1}
         for r in range(info_df.shape[0]):
-            for c in range(info_df.shape[1]):
-                val = str(info_df.iloc[r, c]).strip()
-                if "审核地址" in val or "Audit Address" in val:
-                    if c + 1 < info_df.shape[1]:
-                        rv = str(info_df.iloc[r, c+1]).strip()
-                        if rv and rv.lower() != 'nan':
-                            lines = rv.replace('\r', '\n').split('\n')
-                            en_lines = [l.strip() for l in lines if not is_chinese(l) and l.strip()]
-                            zh_lines = [l.strip() for l in lines if is_chinese(l) and l.strip()]
-                            if en_lines: english_address = " ".join(en_lines)
-                            if zh_lines: native_street = " ".join(zh_lines)
-                        break
+            row_str = " ".join([str(x) for x in info_df.iloc[r, :]]).upper()
+            if "CUSTOMER" in row_str and ("CSR" in row_str or "TITLE" in row_str):
+                header_r = r
+                for c in range(info_df.shape[1]):
+                    val = str(info_df.iloc[r, c]).strip().upper()
+                    if "CUSTOMER" in val or "客户" in val: col_map['cust'] = c
+                    elif "CSR" in val or "TITLE" in val: col_map['name'] = c
+                    elif "VERSION" in val or "DATE" in val or "版本" in val or "日期" in val: col_map['date'] = c
+                    elif "供应商代码" in val or "SUPPLIER" in val or "CODE" in val: col_map['code'] = c
+                break
+                
+        if header_r != -1:
+            for r in range(header_r + 1, info_df.shape[0]):
+                cust_val = str(info_df.iloc[r, col_map['cust']]).strip() if col_map['cust'] != -1 else ""
+                if not cust_val or cust_val.lower() == 'nan': continue
+                if "审核员" in cust_val or "AUDIT" in cust_val.upper() or "NAME" in cust_val.upper(): break
+                    
+                name_val = str(info_df.iloc[r, col_map['name']]).strip() if col_map['name'] != -1 else ""
+                date_val = str(info_df.iloc[r, col_map['date']]).strip() if col_map['date'] != -1 else ""
+                code_val = str(info_df.iloc[r, col_map['code']]).strip() if col_map['code'] != -1 else ""
+                
+                if name_val.lower() == 'nan': name_val = ""
+                if date_val.lower() == 'nan': date_val = ""
+                if code_val.lower() == 'nan': code_val = ""
 
-    # 2. 如果信息表里没找到，再去数据库兜底
-    if not native_street or not english_address:
-        db_candidates = [get_db_val(11, 1), get_db_val(11, 4)]
-        zh_cands = [c for c in db_candidates if c and is_chinese(c)]
-        en_cands = [c for c in db_candidates if c and not is_chinese(c)]
-        if not native_street and zh_cands: native_street = max(zh_cands, key=len)
-        if not english_address and en_cands: english_address = max(en_cands, key=len)
+                # 💥 移除 fmt_iso 转换，仅去掉 pandas 可能附加的 '00:00:00'，实现原样粘贴
+                final_date = date_val.replace(" 00:00:00", "").strip()
 
-    # 倒序切分
+                customers_list.append({
+                    "Name": cust_val,
+                    "SupplierCode": code_val,
+                    "NameCSRDocument": name_val,
+                    "DateCSRDocument": final_date
+                })
+
+    # 兜底：如果没抓到，从数据库找单客户 (同样原样保留日期)
+    if not customers_list:
+        customer_name = find_val_by_key(db_df, ["顾客", "客户名称"]) or get_db_val(29, 1)
+        supplier_code = find_val_by_key(db_df, ["供应商编码", "供应商代码"]) or get_db_val(30, 1)
+        csr_name = find_val_by_key(db_df, ["CSR文件名称"]) or get_db_val(31, 1)
+        csr_date_raw = find_val_by_key(db_df, ["CSR文件日期"]) or get_db_val(32, 1)
+        
+        # 💥 原样保留
+        csr_date = str(csr_date_raw).replace(" 00:00:00", "").strip()
+        if csr_date.lower() == 'nan': csr_date = ""
+
+        if customer_name or supplier_code or csr_name:
+            customers_list.append({
+                "Name": customer_name,
+                "SupplierCode": supplier_code,
+                "NameCSRDocument": csr_name,
+                "DateCSRDocument": csr_date
+            })
+
+    # [终极全方位雷达提取地址]
+    english_address = ""
+    native_street = ""
+    
+    def get_adjacent_cells(df, keywords):
+        cands = []
+        if df.empty: return cands
+        for r in range(df.shape[0]):
+            for c in range(df.shape[1]):
+                val = str(df.iloc[r, c]).strip().upper()
+                for k in keywords:
+                    if k.upper() in val:
+                        if c + 1 < df.shape[1]: cands.append(str(df.iloc[r, c+1]))
+                        if c + 2 < df.shape[1]: cands.append(str(df.iloc[r, c+2]))
+                        if c + 3 < df.shape[1]: cands.append(str(df.iloc[r, c+3]))
+                        if c + 4 < df.shape[1]: cands.append(str(df.iloc[r, c+4]))
+        return [str(x).strip() for x in cands if str(x).strip() and str(x).lower() != 'nan']
+
+    raw_cands = get_adjacent_cells(info_df, ["审核地址", "AUDIT ADDRESS", "ADDRESS"]) + \
+                get_adjacent_cells(db_df, ["地址", "ADDRESS"])
+                
+    en_candidates = []
+    zh_candidates = []
+
+    for cand in raw_cands:
+        lines = cand.replace('\r', '\n').split('\n')
+        en_parts = []
+        zh_parts = []
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            if re.search(r'[\u4e00-\u9fff]', line):
+                zh_parts.append(line)
+            elif re.search(r'[a-zA-Z]', line):
+                en_parts.append(line)
+        
+        if en_parts: en_candidates.append(" ".join(en_parts))
+        if zh_parts: zh_candidates.append(" ".join(zh_parts))
+
+    english_address = max(en_candidates, key=len) if en_candidates else ""
+    native_street = max(zh_candidates, key=len) if zh_candidates else ""
+
+    if not english_address:
+        for df in [info_df, db_df]:
+            if df.empty: continue
+            for r in range(df.shape[0]):
+                for c in range(df.shape[1]):
+                    val = str(df.iloc[r, c]).strip()
+                    val_upper = val.upper()
+                    if ("PROVINCE" in val_upper or "CITY" in val_upper) and re.search(r'[a-zA-Z]', val):
+                        lines = val.replace('\r', '\n').split('\n')
+                        en_parts = [l.strip() for l in lines if not re.search(r'[\u4e00-\u9fff]', l) and re.search(r'[a-zA-Z]', l)]
+                        if en_parts:
+                            cand = " ".join(en_parts)
+                            if len(cand) > len(english_address):
+                                english_address = cand
+
     street, city, state, country = english_address, "", "", ""
     if english_address:
         clean_eng = english_address.replace('，', ',')
@@ -209,6 +288,7 @@ def generate_json_logic(excel_file, base_data, user_data):
     if start_iso: final_json["AuditData"]["AuditDate"]["Start"] = start_iso
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
+    final_json["AuditData"]["AuditorName"] = auditor_name
 
     if "AuditTeam" not in final_json["AuditData"] or not isinstance(final_json["AuditData"]["AuditTeam"], list) or len(final_json["AuditData"]["AuditTeam"]) == 0:
         final_json["AuditData"]["AuditTeam"] = [{}]
@@ -226,7 +306,6 @@ def generate_json_logic(excel_file, base_data, user_data):
     # B. 组织与地址信息 
     ensure_path(final_json, ["OrganizationInformation", "AddressNative"])
     ensure_path(final_json, ["OrganizationInformation", "Address"])
-    
     org = final_json["OrganizationInformation"]
     
     org["OrganizationName"] = find_val_by_key(db_df, ["组织名称"]) or get_db_val(1, 4)
@@ -234,7 +313,6 @@ def generate_json_logic(excel_file, base_data, user_data):
     org["IATF_USI"] = find_val_by_key(db_df, ["IATF USI", "USI"]) or get_db_val(3, 4)
     org["TotalNumberEmployees"] = find_val_by_key(db_df, ["包括扩展现场在内的员工总数", "员工总数"]) or get_db_val(27, 1)
     org["CertificateScope"] = find_val_by_key(db_df, ["证书范围"])
-    
     org["Representative"] = find_val_by_key(db_df, ["组织代表", "管理者代表", "联系人", "Representative"]) or get_db_val(15, 1)
     org["Telephone"] = find_val_by_key(db_df, ["联系电话", "电话", "Telephone"]) or get_db_val(15, 4)
     extracted_email = find_val_by_key(db_df, ["电子邮箱", "邮箱", "Email", "E-mail"]) or get_db_val(16, 1)
@@ -243,48 +321,42 @@ def generate_json_logic(excel_file, base_data, user_data):
     if "LanguageByManufacturingPersonnel" in org:
         lang_node = org["LanguageByManufacturingPersonnel"]
         if isinstance(lang_node, list) and len(lang_node) > 0:
-            if isinstance(lang_node[0], dict):
-                lang_node[0]["Products"] = ""
+            if isinstance(lang_node[0], dict): lang_node[0]["Products"] = ""
         elif isinstance(lang_node, dict):
-            if "0" in lang_node and isinstance(lang_node["0"], dict):
-                lang_node["0"]["Products"] = ""
-            else:
-                lang_node["Products"] = ""
+            if "0" in lang_node and isinstance(lang_node["0"], dict): lang_node["0"]["Products"] = ""
+            else: lang_node["Products"] = ""
     
     org["AddressNative"].update({
         "Street1": native_street,
-        "State": "",
-        "City": "",
-        "Country": "中国",
+        "State": "", "City": "", "Country": "中国",
         "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
     })
     
     org["Address"].update({
-        "State": state, 
-        "City": city, 
-        "Country": country, 
-        "Street1": street,
+        "State": state, "City": city, "Country": country, "Street1": street,
         "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
     })
 
     # C. 顾客与 CSR 
     ensure_path(final_json, ["CustomerInformation"])
-    if "Customers" not in final_json["CustomerInformation"] or not isinstance(final_json["CustomerInformation"]["Customers"], list) or not final_json["CustomerInformation"]["Customers"]:
-        final_json["CustomerInformation"]["Customers"] = [{}]
-        
-    cust = final_json["CustomerInformation"]["Customers"][0]
-    if "Id" not in cust: cust["Id"] = str(uuid.uuid4())
-    if customer_name: cust["Name"] = customer_name
-    if supplier_code: cust["SupplierCode"] = supplier_code
+    final_json["CustomerInformation"]["Customers"] = []
     
-    if "Csrs" not in cust or not isinstance(cust["Csrs"], list) or not cust["Csrs"]:
-        cust["Csrs"] = [{}]
-        
-    csr = cust["Csrs"][0]
-    if customer_name: csr["Name"] = customer_name
-    if supplier_code: csr["SupplierCode"] = supplier_code
-    if csr_name: csr["NameCSRDocument"] = csr_name
-    if csr_date: csr["DateCSRDocument"] = csr_date
+    for c_info in customers_list:
+        cust_obj = {
+            "Id": str(uuid.uuid4()),
+            "Name": c_info["Name"],
+            "SupplierCode": c_info["SupplierCode"],
+            "Csrs": [
+                {
+                    "Id": str(uuid.uuid4()), 
+                    "Name": c_info["Name"], 
+                    "SupplierCode": c_info["SupplierCode"],
+                    "NameCSRDocument": c_info["NameCSRDocument"],
+                    "DateCSRDocument": c_info["DateCSRDocument"]
+                }
+            ]
+        }
+        final_json["CustomerInformation"]["Customers"].append(cust_obj)
 
     # D. 文件清单定点替换
     docs_list = []
@@ -349,8 +421,8 @@ def generate_json_logic(excel_file, base_data, user_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v44.0 地址防短路版)")
-st.markdown("💡 **修复日志**：去除了导致英文地址读取提前短路中断的 BUG 代码，现在英文 Address 节点将完美生成。")
+st.title("🛡️ 多模板审计转换引擎 (v49.0 CSR日期原样保留版)")
+st.markdown("💡 **修改日志**：移除了 `DateCSRDocument` 的强制 ISO 格式化，现在会完美保留原表格中的原始文本（如 V2.0, 2024年4版 等）。")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -361,14 +433,22 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template, user_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板", expanded=True):
-                 st.code(f"""
-【英文 Address 完美切分确认】
-Street1: "{safe_get(res_json['OrganizationInformation']['Address'], 'Street1')}"
-City:    "{safe_get(res_json['OrganizationInformation']['Address'], 'City')}"
-State:   "{safe_get(res_json['OrganizationInformation']['Address'], 'State')}"
-Country: "{safe_get(res_json['OrganizationInformation']['Address'], 'Country')}"
-                 """.strip(), language="yaml")
+            try:
+                cust_list = safe_get(res_json.get('CustomerInformation', {}), 'Customers', [])
+                cust_count = len(cust_list)
+                sample_cust = cust_list[0] if cust_count > 0 else {}
+                sample_csr = sample_cust.get('Csrs', [{}])[0] if sample_cust.get('Csrs') else {}
+
+                with st.expander(f"👀 查看顾客提取结果 (共提取到 {cust_count} 个顾客)", expanded=True):
+                     st.code(f"""
+【第一名顾客提取示例】
+Name:            "{safe_get(sample_cust, 'Name')}"
+SupplierCode:    "{safe_get(sample_cust, 'SupplierCode')}"
+CSR_Document:    "{safe_get(sample_csr, 'NameCSRDocument')}"
+CSR_Date/Version:"{safe_get(sample_csr, 'DateCSRDocument')}"  <-- 现已原样提取
+                     """.strip(), language="yaml")
+            except Exception:
+                pass
 
             st.download_button(
                 label=f"📥 下载 JSON ({file.name})",
@@ -378,6 +458,9 @@ Country: "{safe_get(res_json['OrganizationInformation']['Address'], 'Country')}"
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
+
+
 
 
 
