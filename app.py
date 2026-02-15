@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v49.0)",
+    page_title="IATF 审计转换工具 (v53.0)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -97,15 +97,28 @@ def generate_json_logic(excel_file, base_data, user_data):
 
     # ================= 2. 数据提取 =================
     
-    # [姓名提取与处理逻辑]
+    # 💥 [辅助函数：暴力剥离所有非英文字母，并重排大小写]
+    def extract_and_format_english_name(raw_val):
+        clean_val = str(raw_val).replace("姓名:", "").replace("Name:", "").strip()
+        if not clean_val: return ""
+        
+        eng_only = re.sub(r'[^a-zA-Z\s]', ' ', clean_val).strip()
+        eng_only = re.sub(r'\s+', ' ', eng_only)
+        
+        if eng_only:
+            parts = eng_only.split()
+            if len(parts) >= 2 and parts[0].isupper() and not parts[1].isupper():
+                return f"{parts[1]} {parts[0]}"
+            else:
+                return eng_only
+        return clean_val
+
+    # [全局姓名：保持原始中文不处理，供 AuditData 使用]
     raw_name_full = find_val_by_key(db_df, ["姓名", "Auditor Name"]) or get_db_val(5, 1)
     raw_name = raw_name_full.replace("姓名:", "").replace("Name:", "").strip() if raw_name_full else ""
-    auditor_name = raw_name
-    english_part = re.sub(r'[\u4e00-\u9fff]', '', raw_name).strip()
-    if english_part:
-        parts = english_part.split()
-        if len(parts) >= 2 and parts[0].isupper() and not parts[1].isupper(): auditor_name = f"{parts[1]} {parts[0]}"
-        else: auditor_name = english_part
+
+    # 💥 [生成格式化后的英文名，专门供 AuditTeam 的 Name 使用]
+    formatted_team_name = extract_and_format_english_name(raw_name_full)
 
     # [CCAA]
     ccaa_raw = find_val_by_key(db_df, ["审核员CCAA", "CCAA"]) or get_db_val(4, 1)
@@ -128,7 +141,7 @@ def generate_json_logic(excel_file, base_data, user_data):
                         if len(auditor_id) > 4: break
             if auditor_id and len(auditor_id) > 4: break
 
-    # [审核与结果日期：这些保持严格 ISO 格式]
+    # [审核与结果日期]
     start_date_raw = find_val_by_key(db_df, ["审核开始日期", "审核开始时间"]) or get_db_val(2, 1)
     end_date_raw = find_val_by_key(db_df, ["审核结束日期", "审核结束时间"]) or get_db_val(3, 1)
     
@@ -149,7 +162,7 @@ def generate_json_logic(excel_file, base_data, user_data):
         if pd.notna(end_dt): next_audit_iso = (end_dt + timedelta(days=45)).strftime('%Y-%m-%d') + "T00:00:00.000Z"
     except: pass
 
-    # 💥 [多顾客与 CSR 动态提取：原样保留日期文本]
+    # [多顾客与 CSR 动态提取：原样保留日期文本]
     customers_list = []
     if not info_df.empty:
         header_r = -1
@@ -180,7 +193,6 @@ def generate_json_logic(excel_file, base_data, user_data):
                 if date_val.lower() == 'nan': date_val = ""
                 if code_val.lower() == 'nan': code_val = ""
 
-                # 💥 移除 fmt_iso 转换，仅去掉 pandas 可能附加的 '00:00:00'，实现原样粘贴
                 final_date = date_val.replace(" 00:00:00", "").strip()
 
                 customers_list.append({
@@ -190,17 +202,15 @@ def generate_json_logic(excel_file, base_data, user_data):
                     "DateCSRDocument": final_date
                 })
 
-    # 兜底：如果没抓到，从数据库找单客户 (同样原样保留日期)
     if not customers_list:
         customer_name = find_val_by_key(db_df, ["顾客", "客户名称"]) or get_db_val(29, 1)
         supplier_code = find_val_by_key(db_df, ["供应商编码", "供应商代码"]) or get_db_val(30, 1)
         csr_name = find_val_by_key(db_df, ["CSR文件名称"]) or get_db_val(31, 1)
         csr_date_raw = find_val_by_key(db_df, ["CSR文件日期"]) or get_db_val(32, 1)
         
-        # 💥 原样保留
         csr_date = str(csr_date_raw).replace(" 00:00:00", "").strip()
         if csr_date.lower() == 'nan': csr_date = ""
-
+        
         if customer_name or supplier_code or csr_name:
             customers_list.append({
                 "Name": customer_name,
@@ -209,7 +219,7 @@ def generate_json_logic(excel_file, base_data, user_data):
                 "DateCSRDocument": csr_date
             })
 
-    # [终极全方位雷达提取地址]
+    # [终极防弹地址扫描]
     english_address = ""
     native_street = ""
     
@@ -288,7 +298,10 @@ def generate_json_logic(excel_file, base_data, user_data):
     if start_iso: final_json["AuditData"]["AuditDate"]["Start"] = start_iso
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
-    final_json["AuditData"]["AuditorName"] = auditor_name
+    
+    # AuditorName 保持原始未处理文本
+    final_json["AuditData"]["AuditorName"] = raw_name
+    final_json["AuditData"]["auditorname"] = raw_name
 
     if "AuditTeam" not in final_json["AuditData"] or not isinstance(final_json["AuditData"]["AuditTeam"], list) or len(final_json["AuditData"]["AuditTeam"]) == 0:
         final_json["AuditData"]["AuditTeam"] = [{}]
@@ -296,7 +309,7 @@ def generate_json_logic(excel_file, base_data, user_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": auditor_name,
+            "Name": formatted_team_name, # 💥 恢复：仅针对这里应用提取+格式化后的英文名
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
@@ -417,12 +430,16 @@ def generate_json_logic(excel_file, base_data, user_data):
     
     if end_iso: final_json["Results"]["AuditReportFinal"]["Date"] = end_iso
     if next_audit_iso: final_json["Results"]["DateNextScheduledAudit"] = next_audit_iso
+    
+    b6_raw_val = get_db_val(5, 1)
+    b6_formatted_name = extract_and_format_english_name(b6_raw_val)
+    final_json["Results"]["AuditReportFinal"]["AuditorName"] = b6_formatted_name
 
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v49.0 CSR日期原样保留版)")
-st.markdown("💡 **修改日志**：移除了 `DateCSRDocument` 的强制 ISO 格式化，现在会完美保留原表格中的原始文本（如 V2.0, 2024年4版 等）。")
+st.title("🛡️ 多模板审计转换引擎 (v53.0 最终定稿版)")
+st.markdown("💡 **修改日志**：`AuditTeam -> Name` 现已重新绑定标准格式化英文名，同时保持其他各项配置雷打不动。")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -433,22 +450,14 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template, user_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            try:
-                cust_list = safe_get(res_json.get('CustomerInformation', {}), 'Customers', [])
-                cust_count = len(cust_list)
-                sample_cust = cust_list[0] if cust_count > 0 else {}
-                sample_csr = sample_cust.get('Csrs', [{}])[0] if sample_cust.get('Csrs') else {}
+            with st.expander("👀 查看诊断面板 (姓名格式验证)", expanded=True):
+                 st.code(f"""
+【前端 Name 格式化确认】
+AuditTeam -> Name: "{safe_get(res_json.get('AuditData', {}).get('AuditTeam', [{}])[0], 'Name', '缺失')}"
 
-                with st.expander(f"👀 查看顾客提取结果 (共提取到 {cust_count} 个顾客)", expanded=True):
-                     st.code(f"""
-【第一名顾客提取示例】
-Name:            "{safe_get(sample_cust, 'Name')}"
-SupplierCode:    "{safe_get(sample_cust, 'SupplierCode')}"
-CSR_Document:    "{safe_get(sample_csr, 'NameCSRDocument')}"
-CSR_Date/Version:"{safe_get(sample_csr, 'DateCSRDocument')}"  <-- 现已原样提取
-                     """.strip(), language="yaml")
-            except Exception:
-                pass
+【AuditorName 原样保持确认】
+AuditData -> auditorname: "{res_json.get('AuditData', {}).get('auditorname', '缺失')}"
+                 """.strip(), language="yaml")
 
             st.download_button(
                 label=f"📥 下载 JSON ({file.name})",
@@ -458,14 +467,5 @@ CSR_Date/Version:"{safe_get(sample_csr, 'DateCSRDocument')}"  <-- 现已原样�
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
-
-
-
-
-
-
-
-
-
 
 
