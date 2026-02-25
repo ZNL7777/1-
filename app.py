@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v54.1 EMS扩展版)",
+    page_title="IATF 审计转换工具 (v54.2 EMS修复版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -474,81 +474,8 @@ def generate_json_logic(excel_file, base_data):
     # E. 过程清单重建
     processes = []
     if not proc_df.empty:
-        clause_cols = proc_df.columns[13:] if proc_df.shape[1] > 13 else []
-        for idx, row in proc_df.iterrows():
-            p_name = str(row.iloc[0]).strip()
-            rep_name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-            
-            if not p_name or p_name.lower() == 'nan': continue
-            proc_obj = {
-                "Id": str(uuid.uuid4()),
-                "ProcessName": p_name,
-                "RepresentativeName": rep_name,
-                "ManufacturingProcess": "0",
-                "OnSiteProcess": "1",
-                "RemoteProcess": "0",
-                "AuditNotes": [{
-                    "Id": str(uuid.uuid4()),
-                    "AuditorId": auditor_id,
-                    "AuditorName": auditor_name
-                }]
-            }
-            for col in clause_cols:
-                if str(row[col]).strip().upper() in ['X', 'TRUE']: proc_obj[col] = True
-            processes.append(proc_obj)
-    final_json["Processes"] = processes
+        clause_cols = proc_df.columns[13:] if proc_df.shape[1] > 13 else
 
-    # F. 结果日期
-    if "Results" not in final_json: final_json["Results"] = {}
-    if "AuditReportFinal" not in final_json["Results"]: final_json["Results"]["AuditReportFinal"] = {}
-    
-    if end_iso: final_json["Results"]["AuditReportFinal"]["Date"] = end_iso
-    if next_audit_iso: final_json["Results"]["DateNextScheduledAudit"] = next_audit_iso
-    
-    b6_raw_val = get_db_val(5, 1)
-    b6_formatted_name = extract_and_format_english_name(b6_raw_val)
-    final_json["Results"]["AuditReportFinal"]["AuditorName"] = b6_formatted_name
-
-    return final_json
-
-# ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v54.1 EMS扩展版)")
-st.markdown("💡 **修改日志**：已加入 `ExtendedManufacturingSites` 自动抽取逻辑，并会在找到数据时自动将 `ExtendedManufacturingSite` 标志位置为 1。")
-
-uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
-
-if uploaded_files:
-    st.divider()
-    for file in uploaded_files:
-        try:
-            res_json = generate_json_logic(file, base_template_data)
-            st.success(f"✅ {file.name} 转换成功")
-            
-            with st.expander("👀 查看诊断面板 (EMS验证)", expanded=True):
-                 try:
-                     ems_sites = res_json.get('ExtendedManufacturingSites', [])
-                     ems_count = len(ems_sites)
-                     ems_sample = ems_sites[0] if ems_count > 0 else {}
-                 except:
-                     ems_count = 0
-                     ems_sample = {}
-                     
-                 st.code(f"""
-【EMS 扩展场所提取确认】
-提取数量: {ems_count} 个
-SiteName 拼接结果: "{safe_get(ems_sample, 'SiteName', '无')}"
-Street1 (英文):    "{safe_get(ems_sample.get('Address', {}), 'Street1', '无')}"
-标志位 (0/1):      "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
-                 """.strip(), language="yaml")
-
-            st.download_button(
-                label=f"📥 下载 JSON ({file.name})",
-                data=json.dumps(res_json, indent=2, ensure_ascii=False),
-                file_name=file.name.replace(".xlsx", ".json"),
-                key=f"dl_{file.name}"
-            )
-        except Exception as e:
-            st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
 
 
 
