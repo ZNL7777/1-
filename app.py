@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v54.2 EMS修复版)",
+    page_title="IATF 审计转换工具 (v54.3 EMS定向提取版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -202,18 +202,25 @@ def generate_json_logic(excel_file, base_data):
                 "DateCSRDocument": csr_date
             })
 
-    # 💥 [新增：EMS扩展场所 动态全量提取与地址切分]
+    # 💥 [修改点：限制在 F21:M25 (索引 r:20-24, c:5-12) 范围内精确定向提取 EMS]
     ems_sites = []
     if not info_df.empty:
         header_r = -1
         col_map = {}
-        for r in range(info_df.shape[0]):
-            for c in range(info_df.shape[1]):
+        
+        # 限定扫描边界 (防止索引越界)
+        row_start = 20
+        row_end = min(25, info_df.shape[0])  # 包括 20 到 24
+        col_start = 5
+        col_end = min(13, info_df.shape[1])  # 包括 5 到 12
+
+        # 1. 在限制框内寻找表头
+        for r in range(row_start, row_end):
+            for c in range(col_start, col_end):
                 val = str(info_df.iloc[r, c]).strip().upper()
-                # 兼容多种常见的 EMS 表头名称
                 if "EMS扩展场所信息" in val or "扩展制造场所" in val or "扩展现场" in val:
                     header_r = r
-                    for c_scan in range(info_df.shape[1]):
+                    for c_scan in range(col_start, col_end):
                         h_val = str(info_df.iloc[r, c_scan]).strip()
                         if "中文名称" in h_val: col_map['name_cn'] = c_scan
                         elif "英文名称" in h_val: col_map['name_en'] = c_scan
@@ -225,10 +232,11 @@ def generate_json_logic(excel_file, base_data):
                     break
             if header_r != -1: break
                 
+        # 2. 在限制框内逐行提取数据
         if header_r != -1:
-            for r in range(header_r + 1, info_df.shape[0]):
+            for r in range(header_r + 1, row_end):
                 def safe_get_cell(row, col_idx):
-                    if col_idx == -1: return ""
+                    if col_idx == -1 or col_idx >= info_df.shape[1]: return ""
                     v = str(info_df.iloc[row, col_idx]).strip()
                     return "" if v.lower() == 'nan' else v
 
@@ -236,11 +244,9 @@ def generate_json_logic(excel_file, base_data):
                 name_en = safe_get_cell(r, col_map.get('name_en', -1))
                 addr_cn = safe_get_cell(r, col_map.get('addr_cn', -1))
                 
-                # 如果遇到空行，跳过；如果遇到其他模块表头，跳过
                 if not name_cn and not addr_cn: continue
                 if "名称" in name_cn and "地址" in addr_cn: continue
                 
-                # 拼接中英文名称
                 full_site_name = name_cn
                 if name_en and name_en not in name_cn:
                     full_site_name = f"{name_cn} {name_en}".strip()
@@ -365,7 +371,7 @@ def generate_json_logic(excel_file, base_data):
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
     
-    # 💥 AuditorName 保持原始未处理文本
+    # AuditorName 保持原始未处理文本
     final_json["AuditData"]["AuditorName"] = raw_name
     final_json["AuditData"]["auditorname"] = raw_name
 
@@ -375,7 +381,7 @@ def generate_json_logic(excel_file, base_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": formatted_team_name, # 💥 前端 Name 应用格式化英文名
+            "Name": formatted_team_name, # 前端 Name 应用格式化英文名
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
@@ -416,7 +422,6 @@ def generate_json_logic(excel_file, base_data):
         "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
     })
 
-    # 💥 【修改点】：将 EMS 赋予根节点，并同步更新标志位
     if ems_sites:
         final_json["ExtendedManufacturingSites"] = ems_sites
         org["ExtendedManufacturingSite"] = "1"
@@ -490,7 +495,7 @@ def generate_json_logic(excel_file, base_data):
                 "AuditNotes": [{
                     "Id": str(uuid.uuid4()),
                     "AuditorId": auditor_id,
-                    "AuditorName": raw_name  # 💥 修复：同步将这里设为 raw_name，避免变量报错
+                    "AuditorName": raw_name  
                 }]
             }
             for col in clause_cols:
@@ -512,8 +517,8 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v54.2 EMS修复版)")
-st.markdown("💡 **修改日志**：修复了上一版 `Processes` 中 `auditor_name` 未定义报错的 BUG。且已加入 `ExtendedManufacturingSites` 自动抽取逻辑。")
+st.title("🛡️ 多模板审计转换引擎 (v54.3 EMS定向提取版)")
+st.markdown("💡 **修改日志**：EMS扩展场所信息的搜索范围已被严格限制在【信息】工作表的 F21 到 M25 区域，确保绝不误提无关数据。")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -524,7 +529,7 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (EMS验证)", expanded=True):
+            with st.expander("👀 查看诊断面板 (EMS定向验证)", expanded=True):
                  try:
                      ems_sites = res_json.get('ExtendedManufacturingSites', [])
                      ems_count = len(ems_sites)
@@ -534,7 +539,7 @@ if uploaded_files:
                      ems_sample = {}
                      
                  st.code(f"""
-【EMS 扩展场所提取确认】
+【EMS 扩展场所定向提取确认 (范围: F21:M25)】
 提取数量: {ems_count} 个
 SiteName 拼接结果: "{safe_get(ems_sample, 'SiteName', '无')}"
 Street1 (英文):    "{safe_get(ems_sample.get('Address', {}), 'Street1', '无')}"
@@ -549,6 +554,7 @@ Street1 (英文):    "{safe_get(ems_sample.get('Address', {}), 'Street1', '无')
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
 
 
 
