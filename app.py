@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v55.0 支持场所生成版)",
+    page_title="IATF 审计转换工具 (v56.0 RL层级纠正版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -202,12 +202,11 @@ def generate_json_logic(excel_file, base_data):
                 "DateCSRDocument": csr_date
             })
 
-    # 💥 [新增：支持场所 (RL) 动态全量提取与地址切分]
+    # [支持场所 (RL) 动态全量提取与地址切分]
     support_sites = []
     if not info_df.empty:
         header_r = -1
         col_map = {}
-        # 1. 寻找表头
         for r in range(info_df.shape[0]):
             for c in range(info_df.shape[1]):
                 val = str(info_df.iloc[r, c]).strip().upper()
@@ -226,7 +225,6 @@ def generate_json_logic(excel_file, base_data):
                     break
             if header_r != -1: break
                 
-        # 2. 逐行提取
         if header_r != -1:
             for r in range(header_r + 1, info_df.shape[0]):
                 def safe_get_cell(row, col_idx):
@@ -237,7 +235,6 @@ def generate_json_logic(excel_file, base_data):
                 name_cn = safe_get_cell(r, col_map.get('name_cn', -1))
                 addr_cn = safe_get_cell(r, col_map.get('addr_cn', -1))
                 
-                # 如果遇到空行，跳过；如果遇到其他模块表头，跳过
                 if not name_cn and not addr_cn: continue
                 if "名称" in name_cn and "地址" in addr_cn: continue
                     
@@ -247,7 +244,6 @@ def generate_json_logic(excel_file, base_data):
                 emp = safe_get_cell(r, col_map.get('emp', -1))
                 func = safe_get_cell(r, col_map.get('func', -1))
 
-                # 完美复用倒序切分逻辑
                 rl_street, rl_city, rl_state, rl_country = addr_en, "", "", ""
                 if addr_en:
                     clean_eng = addr_en.replace('，', ',')
@@ -262,10 +258,8 @@ def generate_json_logic(excel_file, base_data):
 
                 site_obj = {
                     "Id": str(uuid.uuid4()),
-                    "OrganizationName": name_cn,
-                    "IATF_USI": usi,
-                    "TotalNumberEmployees": emp,
-                    "SupportFunctions": func,
+                    "SiteName": name_cn,
+                    "Comments": func,
                     "AddressNative": {
                         "Street1": addr_cn,
                         "City": "",
@@ -363,7 +357,6 @@ def generate_json_logic(excel_file, base_data):
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
     
-    # AuditorName 保持原始未处理文本
     final_json["AuditData"]["AuditorName"] = raw_name
     final_json["AuditData"]["auditorname"] = raw_name
 
@@ -373,7 +366,7 @@ def generate_json_logic(excel_file, base_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": formatted_team_name, # 前端 Name 应用格式化英文名
+            "Name": formatted_team_name,
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
@@ -413,10 +406,10 @@ def generate_json_logic(excel_file, base_data):
         "State": state, "City": city, "Country": country, "Street1": street,
         "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
     })
-    
-    # 💥 将提取到的支持场所列表赋给 JSON 结构
+
+    # 💥 【修改点：将支持场所放在根目录级别】
     if support_sites:
-        org["ProvidingSupportSites"] = support_sites
+        final_json["ProvidingSupportSites"] = support_sites
 
     # C. 顾客与 CSR 
     ensure_path(final_json, ["CustomerInformation"])
@@ -506,8 +499,8 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v55.0 支持场所生成版)")
-st.markdown("💡 **最新增量**：现已支持在 `OrganizationInformation` 节点下自动生成全量的 `ProvidingSupportSites` 数据结构及其包含的倒序英译地址。")
+st.title("🛡️ 多模板审计转换引擎 (v56.0 RL层级纠正版)")
+st.markdown("💡 **修改日志**：已将 `ProvidingSupportSites` 纠正为直接写在根目录层级（与 `OrganizationInformation` 平级），确保完全符合 JSON 底座的标准。")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -518,9 +511,9 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (支持场所与格式校验)", expanded=True):
+            with st.expander("👀 查看诊断面板 (支持场所校验)", expanded=True):
                  try:
-                     rl_sites = res_json.get('OrganizationInformation', {}).get('ProvidingSupportSites', [])
+                     rl_sites = res_json.get('ProvidingSupportSites', [])
                      rl_count = len(rl_sites)
                      rl_sample = rl_sites[0] if rl_count > 0 else {}
                  except:
@@ -528,16 +521,10 @@ if uploaded_files:
                      rl_sample = {}
                      
                  st.code(f"""
-【支持场所 (RL) 提取确认】
+【支持场所 (RL) 根目录提取确认】
 提取数量: {rl_count} 个
-示例名称: "{safe_get(rl_sample, 'OrganizationName', '无')}"
+示例名称: "{safe_get(rl_sample, 'SiteName', '无')}"
 示例英文Street1: "{safe_get(rl_sample.get('Address', {}), 'Street1', '无')}"
-
-【前端 Name 格式化确认】
-AuditTeam -> Name: "{safe_get(res_json.get('AuditData', {}).get('AuditTeam', [{}])[0], 'Name', '缺失')}"
-
-【AuditorName 原始中文保持确认】
-AuditData -> auditorname: "{res_json.get('AuditData', {}).get('auditorname', '缺失')}"
                  """.strip(), language="yaml")
 
             st.download_button(
@@ -548,6 +535,7 @@ AuditData -> auditorname: "{res_json.get('AuditData', {}).get('auditorname', '�
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
 
 
 
