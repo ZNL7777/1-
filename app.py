@@ -9,16 +9,15 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v54.3 EMS定向提取版)",
-    page_icon="🛡️",
+    page_title="IATF 转换工具 (项目B: RL专用版)",
+    page_icon="🏢",
     layout="wide"
 )
 
 # --- 1. 侧边栏：模板加载 ---
 with st.sidebar:
-    st.header("⚙️ 模板配置")
-    
-    st.info("💡 请上传您的 JSON 模板。程序将把该文件作为完整的底层骨架。")
+    st.header("⚙️ 模板配置 (RL模式)")
+    st.info("💡 请上传基础 JSON 模板。本程序将专门定向提取 RL 支持场所信息。")
     user_template_file = st.file_uploader("上传基础 JSON 模板", type=["json"])
     
     base_template_data = None
@@ -49,7 +48,6 @@ def safe_get(obj, key, default=""):
 
 # --- 核心转换逻辑 ---
 def generate_json_logic(excel_file, base_data):
-    # 💥 直接使用用户上传的模板作为最终底座
     final_json = copy.deepcopy(base_data)
     
     try:
@@ -80,14 +78,11 @@ def generate_json_logic(excel_file, base_data):
 
     # ================= 2. 数据提取 =================
     
-    # [辅助函数：暴力剥离所有非英文字母，并重排大小写]
     def extract_and_format_english_name(raw_val):
         clean_val = str(raw_val).replace("姓名:", "").replace("Name:", "").strip()
         if not clean_val: return ""
-        
         eng_only = re.sub(r'[^a-zA-Z\s]', ' ', clean_val).strip()
         eng_only = re.sub(r'\s+', ' ', eng_only)
-        
         if eng_only:
             parts = eng_only.split()
             if len(parts) >= 2 and parts[0].isupper() and not parts[1].isupper():
@@ -96,21 +91,16 @@ def generate_json_logic(excel_file, base_data):
                 return eng_only
         return clean_val
 
-    # [全局姓名：保持原始中文不处理，供 AuditData 使用]
     raw_name_full = find_val_by_key(db_df, ["姓名", "Auditor Name"]) or get_db_val(5, 1)
     raw_name = raw_name_full.replace("姓名:", "").replace("Name:", "").strip() if raw_name_full else ""
-
-    # [生成格式化后的英文名，专门供 AuditTeam 的 Name 使用]
     formatted_team_name = extract_and_format_english_name(raw_name_full)
 
-    # [CCAA]
     ccaa_raw = find_val_by_key(db_df, ["审核员CCAA", "CCAA"]) or get_db_val(4, 1)
     caa_no = ""
     if ccaa_raw:
         match = re.search(r'(?:CCAA[:：\s-])\s*(.*)', ccaa_raw, re.IGNORECASE | re.DOTALL)
         caa_no = match.group(1).strip() if match else ccaa_raw.strip()
 
-    # [AuditorId]
     auditor_id = ""
     if not info_df.empty:
         for r in range(info_df.shape[0]):
@@ -124,7 +114,6 @@ def generate_json_logic(excel_file, base_data):
                         if len(auditor_id) > 4: break
             if auditor_id and len(auditor_id) > 4: break
 
-    # [日期]
     start_date_raw = find_val_by_key(db_df, ["审核开始日期", "审核开始时间"]) or get_db_val(2, 1)
     end_date_raw = find_val_by_key(db_df, ["审核结束日期", "审核结束时间"]) or get_db_val(3, 1)
     
@@ -145,7 +134,6 @@ def generate_json_logic(excel_file, base_data):
         if pd.notna(end_dt): next_audit_iso = (end_dt + timedelta(days=45)).strftime('%Y-%m-%d') + "T00:00:00.000Z"
     except: pass
 
-    # [多顾客与 CSR 动态提取]
     customers_list = []
     if not info_df.empty:
         header_r = -1
@@ -172,10 +160,6 @@ def generate_json_logic(excel_file, base_data):
                 date_val = str(info_df.iloc[r, col_map['date']]).strip() if col_map['date'] != -1 else ""
                 code_val = str(info_df.iloc[r, col_map['code']]).strip() if col_map['code'] != -1 else ""
                 
-                if name_val.lower() == 'nan': name_val = ""
-                if date_val.lower() == 'nan': date_val = ""
-                if code_val.lower() == 'nan': code_val = ""
-
                 final_date = date_val.replace(" 00:00:00", "").strip()
 
                 customers_list.append({
@@ -202,25 +186,23 @@ def generate_json_logic(excel_file, base_data):
                 "DateCSRDocument": csr_date
             })
 
-    # 💥 [修改点：限制在 F21:M25 (索引 r:20-24, c:5-12) 范围内精确定向提取 EMS]
-    ems_sites = []
+    # 💥 [RL支持场所 定向提取 F27:N32]
+    support_sites = []
     if not info_df.empty:
         header_r = -1
         col_map = {}
-        
-        # 限定扫描边界 (防止索引越界)
-        row_start = 20
-        row_end = min(25, info_df.shape[0])  # 包括 20 到 24
-        col_start = 5
-        col_end = min(13, info_df.shape[1])  # 包括 5 到 12
+        # 严格限制搜索边界 F27:N32
+        rl_row_start = 26
+        rl_row_end = min(32, info_df.shape[0])
+        rl_col_start = 5
+        rl_col_end = min(14, info_df.shape[1])
 
-        # 1. 在限制框内寻找表头
-        for r in range(row_start, row_end):
-            for c in range(col_start, col_end):
+        for r in range(rl_row_start, rl_row_end):
+            for c in range(rl_col_start, rl_col_end):
                 val = str(info_df.iloc[r, c]).strip().upper()
-                if "EMS扩展场所信息" in val or "扩展制造场所" in val or "扩展现场" in val:
+                if "被支持场所信息" in val or "RL支持场所" in val or "支持场所信息" in val:
                     header_r = r
-                    for c_scan in range(col_start, col_end):
+                    for c_scan in range(rl_col_start, rl_col_end):
                         h_val = str(info_df.iloc[r, c_scan]).strip()
                         if "中文名称" in h_val: col_map['name_cn'] = c_scan
                         elif "英文名称" in h_val: col_map['name_en'] = c_scan
@@ -229,12 +211,12 @@ def generate_json_logic(excel_file, base_data):
                         elif "邮编" in h_val or "邮政编码" in h_val: col_map['zip'] = c_scan
                         elif "USI" in h_val.upper(): col_map['usi'] = c_scan
                         elif "人数" in h_val: col_map['emp'] = c_scan
+                        elif "支持功能" in h_val: col_map['func'] = c_scan
                     break
             if header_r != -1: break
                 
-        # 2. 在限制框内逐行提取数据
         if header_r != -1:
-            for r in range(header_r + 1, row_end):
+            for r in range(header_r + 1, rl_row_end):
                 def safe_get_cell(row, col_idx):
                     if col_idx == -1 or col_idx >= info_df.shape[1]: return ""
                     v = str(info_df.iloc[row, col_idx]).strip()
@@ -255,23 +237,24 @@ def generate_json_logic(excel_file, base_data):
                 zip_code = safe_get_cell(r, col_map.get('zip', -1))
                 usi = safe_get_cell(r, col_map.get('usi', -1))
                 emp = safe_get_cell(r, col_map.get('emp', -1))
+                func = safe_get_cell(r, col_map.get('func', -1))
 
-                # 执行倒序切分
-                ems_street, ems_city, ems_state, ems_country = addr_en, "", "", ""
+                rl_street, rl_city, rl_state, rl_country = addr_en, "", "", ""
                 if addr_en:
                     clean_eng = addr_en.replace('，', ',')
                     parts = [p.strip() for p in clean_eng.split(',') if p.strip()]
                     if len(parts) >= 3:
-                        ems_country = parts[-1]
-                        ems_state = parts[-2]
-                        ems_city = parts[-3]
-                        ems_street = ", ".join(parts[:-3])
+                        rl_country = parts[-1]
+                        rl_state = parts[-2]
+                        rl_city = parts[-3]
+                        rl_street = ", ".join(parts[:-3])
                     else:
-                        ems_street = addr_en
+                        rl_street = addr_en
 
                 site_obj = {
                     "Id": str(uuid.uuid4()),
                     "SiteName": full_site_name,
+                    "Comments": func,
                     "IATF_USI": usi,
                     "TotalNumberEmployees": emp,
                     "AddressNative": {
@@ -282,71 +265,78 @@ def generate_json_logic(excel_file, base_data):
                         "PostalCode": zip_code
                     },
                     "Address": {
-                        "Street1": ems_street,
-                        "City": ems_city,
-                        "State": ems_state,
-                        "Country": ems_country,
+                        "Street1": rl_street,
+                        "City": rl_city,
+                        "State": rl_state,
+                        "Country": rl_country,
                         "PostalCode": zip_code
                     }
                 }
-                ems_sites.append(site_obj)
+                support_sites.append(site_obj)
 
-    # [终极防弹地址扫描 (主地址)]
+    # [细胞级地址混合剥离扫描 (主地址)]
     english_address = ""
     native_street = ""
     
-    def get_adjacent_cells(df, keywords):
-        cands = []
-        if df.empty: return cands
+    cands = []
+    if not db_df.empty:
+        for r_idx in range(9, 14):
+            if r_idx < db_df.shape[0]:
+                if 1 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 1]))
+                if 4 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 4]))
+                
+    def get_anchored(df, keywords):
+        res = []
+        if df.empty: return res
         for r in range(df.shape[0]):
             for c in range(df.shape[1]):
                 val = str(df.iloc[r, c]).strip().upper()
-                for k in keywords:
-                    if k.upper() in val:
-                        if c + 1 < df.shape[1]: cands.append(str(df.iloc[r, c+1]))
-                        if c + 2 < df.shape[1]: cands.append(str(df.iloc[r, c+2]))
-                        if c + 3 < df.shape[1]: cands.append(str(df.iloc[r, c+3]))
-                        if c + 4 < df.shape[1]: cands.append(str(df.iloc[r, c+4]))
-        return [str(x).strip() for x in cands if str(x).strip() and str(x).lower() != 'nan']
+                if any(k in val for k in keywords):
+                    res.append(str(df.iloc[r, c])) 
+                    if c + 1 < df.shape[1]: res.append(str(df.iloc[r, c+1]))
+                    if c + 2 < df.shape[1]: res.append(str(df.iloc[r, c+2]))
+                    if r + 1 < df.shape[0]: res.append(str(df.iloc[r+1, c]))
+                    if r + 1 < df.shape[0] and c+1 < df.shape[1]: res.append(str(df.iloc[r+1, c+1]))
+        return res
+        
+    cands += get_anchored(info_df, ["审核地址", "AUDIT ADDRESS", "ADDRESS"])
+    cands += get_anchored(db_df, ["地址", "ADDRESS"])
+    
+    en_parts = []
+    zh_parts = []
 
-    raw_cands = get_adjacent_cells(info_df, ["审核地址", "AUDIT ADDRESS", "ADDRESS"]) + \
-                get_adjacent_cells(db_df, ["地址", "ADDRESS"])
-                
-    en_candidates = []
-    zh_candidates = []
-
-    for cand in raw_cands:
+    for cand in cands:
+        cand = str(cand).strip()
+        if not cand or cand.lower() == 'nan': continue
+        
+        cand = re.sub(r'^(审核地址|组织地址|企业地址|地址|现场地址|AUDIT ADDRESS|ADDRESS)[\s:：]*', '', cand, flags=re.IGNORECASE).strip()
+        if not cand: continue
+        
         lines = cand.replace('\r', '\n').split('\n')
-        en_parts = []
-        zh_parts = []
         for line in lines:
             line = line.strip()
             if not line: continue
-            if re.search(r'[\u4e00-\u9fff]', line):
+            
+            has_zh = bool(re.search(r'[\u4e00-\u9fff]', line))
+            has_en = bool(re.search(r'[a-zA-Z]{3,}', line)) 
+            
+            if has_zh and has_en:
+                en_str = re.sub(r'[\u4e00-\u9fff]', ' ', line)
+                en_str = re.sub(r'[，。；（）]', ' ', en_str) 
+                en_str = re.sub(r'\s+', ' ', en_str).strip(" ()-.,")
+                
+                zh_str = re.sub(r'[a-zA-Z]', '', line)
+                zh_str = re.sub(r'\s+', ' ', zh_str).strip(" ()-.,")
+                
+                if len(en_str) > 10: en_parts.append(en_str)
+                if len(zh_str) > 5: zh_parts.append(zh_str)
+            elif has_zh:
                 zh_parts.append(line)
-            elif re.search(r'[a-zA-Z]', line):
+            elif has_en:
                 en_parts.append(line)
-        
-        if en_parts: en_candidates.append(" ".join(en_parts))
-        if zh_parts: zh_candidates.append(" ".join(zh_parts))
 
-    english_address = max(en_candidates, key=len) if en_candidates else ""
-    native_street = max(zh_candidates, key=len) if zh_candidates else ""
-
-    if not english_address:
-        for df in [info_df, db_df]:
-            if df.empty: continue
-            for r in range(df.shape[0]):
-                for c in range(df.shape[1]):
-                    val = str(df.iloc[r, c]).strip()
-                    val_upper = val.upper()
-                    if ("PROVINCE" in val_upper or "CITY" in val_upper) and re.search(r'[a-zA-Z]', val):
-                        lines = val.replace('\r', '\n').split('\n')
-                        en_parts = [l.strip() for l in lines if not re.search(r'[\u4e00-\u9fff]', l) and re.search(r'[a-zA-Z]', l)]
-                        if en_parts:
-                            cand = " ".join(en_parts)
-                            if len(cand) > len(english_address):
-                                english_address = cand
+    english_address = max(en_parts, key=len) if en_parts else ""
+    native_street = max(zh_parts, key=len) if zh_parts else ""
 
     street, city, state, country = english_address, "", "", ""
     if english_address:
@@ -365,13 +355,11 @@ def generate_json_logic(excel_file, base_data):
     final_json["uuid"] = str(uuid.uuid4())
     final_json["created"] = int(time.time() * 1000)
 
-    # A. 审核数据
     ensure_path(final_json, ["AuditData", "AuditDate"])
     if start_iso: final_json["AuditData"]["AuditDate"]["Start"] = start_iso
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
     
-    # AuditorName 保持原始未处理文本
     final_json["AuditData"]["AuditorName"] = raw_name
     final_json["AuditData"]["auditorname"] = raw_name
 
@@ -381,14 +369,13 @@ def generate_json_logic(excel_file, base_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": formatted_team_name, # 前端 Name 应用格式化英文名
+            "Name": formatted_team_name, 
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
             "DatesOnSite": [{"Date": start_iso, "Day": 1}, {"Date": end_iso, "Day": 0.5}]
         })
 
-    # B. 组织与地址信息 
     ensure_path(final_json, ["OrganizationInformation", "AddressNative"])
     ensure_path(final_json, ["OrganizationInformation", "Address"])
     org = final_json["OrganizationInformation"]
@@ -411,24 +398,25 @@ def generate_json_logic(excel_file, base_data):
             if "0" in lang_node and isinstance(lang_node["0"], dict): lang_node["0"]["Products"] = ""
             else: lang_node["Products"] = ""
     
-    org["AddressNative"].update({
-        "Street1": native_street,
-        "State": "", "City": "", "Country": "中国",
-        "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
-    })
+    if native_street:
+        org["AddressNative"]["Street1"] = native_street
+    org["AddressNative"]["Country"] = "中国"
     
-    org["Address"].update({
-        "State": state, "City": city, "Country": country, "Street1": street,
-        "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
-    })
+    if english_address:
+        org["Address"]["State"] = state
+        org["Address"]["City"] = city
+        org["Address"]["Country"] = country if country else "China"
+        org["Address"]["Street1"] = street
+        
+    postal_code = find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
+    if postal_code:
+        org["AddressNative"]["PostalCode"] = postal_code
+        org["Address"]["PostalCode"] = postal_code
 
-    if ems_sites:
-        final_json["ExtendedManufacturingSites"] = ems_sites
-        org["ExtendedManufacturingSite"] = "1"
-    else:
-        org["ExtendedManufacturingSite"] = "0"
+    # 💥 仅写入 RL 节点
+    if support_sites:
+        final_json["ProvidingSupportSites"] = support_sites
 
-    # C. 顾客与 CSR 
     ensure_path(final_json, ["CustomerInformation"])
     final_json["CustomerInformation"]["Customers"] = []
     
@@ -449,7 +437,6 @@ def generate_json_logic(excel_file, base_data):
         }
         final_json["CustomerInformation"]["Customers"].append(cust_obj)
 
-    # D. 文件清单定点替换
     docs_list = []
     if not doc_list_df.empty:
         for c in range(doc_list_df.shape[1]):
@@ -476,7 +463,6 @@ def generate_json_logic(excel_file, base_data):
             else:
                 clause_docs.append({"DocumentName": doc_name})
 
-    # E. 过程清单重建
     processes = []
     if not proc_df.empty:
         clause_cols = proc_df.columns[13:] if proc_df.shape[1] > 13 else []
@@ -503,7 +489,6 @@ def generate_json_logic(excel_file, base_data):
             processes.append(proc_obj)
     final_json["Processes"] = processes
 
-    # F. 结果日期
     if "Results" not in final_json: final_json["Results"] = {}
     if "AuditReportFinal" not in final_json["Results"]: final_json["Results"]["AuditReportFinal"] = {}
     
@@ -517,10 +502,10 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v54.3 EMS定向提取版)")
-st.markdown("💡 **修改日志**：EMS扩展场所信息的搜索范围已被严格限制在【信息】工作表的 F21 到 M25 区域，确保绝不误提无关数据。")
+st.title("🛡️ 项目B：多模板审计转换引擎 (RL 专用版)")
+st.markdown("💡 **专属功能**：专门在 `信息` 表的 **F27-N32** 区域中提取 `ProvidingSupportSites`，不会进行任何 EMS 提取操作。")
 
-uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📥 上传 Excel 数据表 (支持批量)", type=["xlsx"], accept_multiple_files=True)
 
 if uploaded_files:
     st.divider()
@@ -529,21 +514,19 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (EMS定向验证)", expanded=True):
+            with st.expander("👀 查看诊断面板 (RL 定向验证)", expanded=True):
                  try:
-                     ems_sites = res_json.get('ExtendedManufacturingSites', [])
-                     ems_count = len(ems_sites)
-                     ems_sample = ems_sites[0] if ems_count > 0 else {}
+                     rl_sites = res_json.get('ProvidingSupportSites', [])
+                     rl_count = len(rl_sites)
+                     rl_sample = rl_sites[0] if rl_count > 0 else {}
                  except:
-                     ems_count = 0
-                     ems_sample = {}
+                     rl_count = 0
+                     rl_sample = {}
                      
                  st.code(f"""
-【EMS 扩展场所定向提取确认 (范围: F21:M25)】
-提取数量: {ems_count} 个
-SiteName 拼接结果: "{safe_get(ems_sample, 'SiteName', '无')}"
-Street1 (英文):    "{safe_get(ems_sample.get('Address', {}), 'Street1', '无')}"
-标志位 (0/1):      "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
+【RL 支持场所提取确认 (范围: F27:N32)】
+提取数量: {rl_count} 个
+SiteName 拼接结果: "{safe_get(rl_sample, 'SiteName', '无')}"
                  """.strip(), language="yaml")
 
             st.download_button(
