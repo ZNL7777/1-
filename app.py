@@ -9,15 +9,25 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 转换工具 (项目B: RL专用版)",
-    page_icon="🏢",
+    page_title="IATF 审计转换工具 (v60.0 三合一旗舰版)",
+    page_icon="🛡️",
     layout="wide"
 )
 
-# --- 1. 侧边栏：模板加载 ---
+# --- 1. 侧边栏：模板与模式配置 ---
 with st.sidebar:
-    st.header("⚙️ 模板配置 (RL模式)")
-    st.info("💡 请上传基础 JSON 模板。本程序将专门定向提取 RL 支持场所信息。")
+    st.header("⚙️ 全局配置")
+    
+    # 💥 新增：模式选择器
+    st.markdown("### 🔍 选择生成模式")
+    run_mode = st.radio(
+        "请根据报告类型选择需要提取的模块：",
+        ("纯净标准模式 (不提取 EMS/RL)", "EMS 扩展场所模式 (范围 F21-M25)", "RL 支持场所模式 (范围 F27-N32)"),
+        index=0
+    )
+    st.divider()
+    
+    st.info("💡 请上传您的 JSON 模板。程序将把该文件作为完整的底层骨架。")
     user_template_file = st.file_uploader("上传基础 JSON 模板", type=["json"])
     
     base_template_data = None
@@ -47,7 +57,7 @@ def safe_get(obj, key, default=""):
     return default
 
 # --- 核心转换逻辑 ---
-def generate_json_logic(excel_file, base_data):
+def generate_json_logic(excel_file, base_data, mode):
     final_json = copy.deepcopy(base_data)
     
     try:
@@ -186,12 +196,95 @@ def generate_json_logic(excel_file, base_data):
                 "DateCSRDocument": csr_date
             })
 
-    # 💥 [RL支持场所 定向提取 F27:N32]
+    # 💥 [模式分发：根据用户选择的模式执行特定提取]
+    ems_sites = []
     support_sites = []
-    if not info_df.empty:
+    
+    if "EMS" in mode and not info_df.empty:
         header_r = -1
         col_map = {}
-        # 严格限制搜索边界 F27:N32
+        row_start = 20
+        row_end = min(25, info_df.shape[0])
+        col_start = 5
+        col_end = min(13, info_df.shape[1])
+
+        for r in range(row_start, row_end):
+            for c in range(col_start, col_end):
+                val = str(info_df.iloc[r, c]).strip().upper()
+                if "EMS扩展场所信息" in val or "扩展制造场所" in val or "扩展现场" in val:
+                    header_r = r
+                    for c_scan in range(col_start, col_end):
+                        h_val = str(info_df.iloc[r, c_scan]).strip()
+                        if "中文名称" in h_val: col_map['name_cn'] = c_scan
+                        elif "英文名称" in h_val: col_map['name_en'] = c_scan
+                        elif "中文地址" in h_val: col_map['addr_cn'] = c_scan
+                        elif "英文地址" in h_val: col_map['addr_en'] = c_scan
+                        elif "邮编" in h_val or "邮政编码" in h_val: col_map['zip'] = c_scan
+                        elif "USI" in h_val.upper(): col_map['usi'] = c_scan
+                        elif "人数" in h_val: col_map['emp'] = c_scan
+                    break
+            if header_r != -1: break
+                
+        if header_r != -1:
+            for r in range(header_r + 1, row_end):
+                def safe_get_cell(row, col_idx):
+                    if col_idx == -1 or col_idx >= info_df.shape[1]: return ""
+                    v = str(info_df.iloc[row, col_idx]).strip()
+                    return "" if v.lower() == 'nan' else v
+
+                name_cn = safe_get_cell(r, col_map.get('name_cn', -1))
+                name_en = safe_get_cell(r, col_map.get('name_en', -1))
+                addr_cn = safe_get_cell(r, col_map.get('addr_cn', -1))
+                
+                if not name_cn and not addr_cn: continue
+                if "名称" in name_cn and "地址" in addr_cn: continue
+                
+                full_site_name = name_cn
+                if name_en and name_en not in name_cn:
+                    full_site_name = f"{name_cn} {name_en}".strip()
+
+                addr_en = safe_get_cell(r, col_map.get('addr_en', -1))
+                zip_code = safe_get_cell(r, col_map.get('zip', -1))
+                usi = safe_get_cell(r, col_map.get('usi', -1))
+                emp = safe_get_cell(r, col_map.get('emp', -1))
+
+                ems_street, ems_city, ems_state, ems_country = addr_en, "", "", ""
+                if addr_en:
+                    clean_eng = addr_en.replace('，', ',')
+                    parts = [p.strip() for p in clean_eng.split(',') if p.strip()]
+                    if len(parts) >= 3:
+                        ems_country = parts[-1]
+                        ems_state = parts[-2]
+                        ems_city = parts[-3]
+                        ems_street = ", ".join(parts[:-3])
+                    else:
+                        ems_street = addr_en
+
+                site_obj = {
+                    "Id": str(uuid.uuid4()),
+                    "SiteName": full_site_name,
+                    "IATF_USI": usi,
+                    "TotalNumberEmployees": emp,
+                    "AddressNative": {
+                        "Street1": addr_cn,
+                        "City": "",
+                        "State": "",
+                        "Country": "中国",
+                        "PostalCode": zip_code
+                    },
+                    "Address": {
+                        "Street1": ems_street,
+                        "City": ems_city,
+                        "State": ems_state,
+                        "Country": ems_country,
+                        "PostalCode": zip_code
+                    }
+                }
+                ems_sites.append(site_obj)
+
+    elif "RL" in mode and not info_df.empty:
+        header_r = -1
+        col_map = {}
         rl_row_start = 26
         rl_row_end = min(32, info_df.shape[0])
         rl_col_start = 5
@@ -413,9 +506,19 @@ def generate_json_logic(excel_file, base_data):
         org["AddressNative"]["PostalCode"] = postal_code
         org["Address"]["PostalCode"] = postal_code
 
-    # 💥 仅写入 RL 节点
-    if support_sites:
-        final_json["ProvidingSupportSites"] = support_sites
+    # 💥 根据模式分发节点
+    if "EMS" in mode:
+        if ems_sites:
+            final_json["ExtendedManufacturingSites"] = ems_sites
+            org["ExtendedManufacturingSite"] = "1"
+        else:
+            org["ExtendedManufacturingSite"] = "0"
+    elif "RL" in mode:
+        org["ExtendedManufacturingSite"] = "0"
+        if support_sites:
+            final_json["ProvidingSupportSites"] = support_sites
+    else:
+        org["ExtendedManufacturingSite"] = "0"
 
     ensure_path(final_json, ["CustomerInformation"])
     final_json["CustomerInformation"]["Customers"] = []
@@ -502,8 +605,9 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 项目B：多模板审计转换引擎 (RL 专用版)")
-st.markdown("💡 **专属功能**：专门在 `信息` 表的 **F27-N32** 区域中提取 `ProvidingSupportSites`，不会进行任何 EMS 提取操作。")
+st.title("🛡️ 多模板审计转换引擎 (v60.0 三合一旗舰版)")
+st.markdown("💡 **当前运行模式**: `" + run_mode + "`")
+st.markdown("👈 请在左侧边栏**切换生成模式**，程序将严格根据您选择的模式进行定向提取，互不干扰！")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表 (支持批量)", type=["xlsx"], accept_multiple_files=True)
 
@@ -511,23 +615,45 @@ if uploaded_files:
     st.divider()
     for file in uploaded_files:
         try:
-            res_json = generate_json_logic(file, base_template_data)
+            # 💥 将侧边栏获取到的模式(run_mode)传给核心逻辑
+            res_json = generate_json_logic(file, base_template_data, run_mode)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (RL 定向验证)", expanded=True):
-                 try:
-                     rl_sites = res_json.get('ProvidingSupportSites', [])
-                     rl_count = len(rl_sites)
-                     rl_sample = rl_sites[0] if rl_count > 0 else {}
-                 except:
-                     rl_count = 0
-                     rl_sample = {}
+            with st.expander("👀 查看诊断面板 (针对当前模式的提取校验)", expanded=True):
+                 if "EMS" in run_mode:
+                     try:
+                         ems_sites = res_json.get('ExtendedManufacturingSites', [])
+                         ems_count = len(ems_sites)
+                         ems_sample = ems_sites[0] if ems_count > 0 else {}
+                     except:
+                         ems_count, ems_sample = 0, {}
+                     st.code(f"""
+【当前模式：EMS 扩展场所 (F21:M25)】
+提取数量: {ems_count} 个
+SiteName: "{safe_get(ems_sample, 'SiteName', '无')}"
+标志位  : "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
+                     """.strip(), language="yaml")
                      
-                 st.code(f"""
-【RL 支持场所提取确认 (范围: F27:N32)】
+                 elif "RL" in run_mode:
+                     try:
+                         rl_sites = res_json.get('ProvidingSupportSites', [])
+                         rl_count = len(rl_sites)
+                         rl_sample = rl_sites[0] if rl_count > 0 else {}
+                     except:
+                         rl_count, rl_sample = 0, {}
+                     st.code(f"""
+【当前模式：RL 支持场所 (F27:N32)】
 提取数量: {rl_count} 个
-SiteName 拼接结果: "{safe_get(rl_sample, 'SiteName', '无')}"
-                 """.strip(), language="yaml")
+SiteName: "{safe_get(rl_sample, 'SiteName', '无')}"
+                     """.strip(), language="yaml")
+                     
+                 else:
+                     st.code(f"""
+【当前模式：纯净标准模式】
+主地址剥离情况：
+Street1(中文): "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
+Street1(英文): "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
+                     """.strip(), language="yaml")
 
             st.download_button(
                 label=f"📥 下载 JSON ({file.name})",
@@ -537,6 +663,7 @@ SiteName 拼接结果: "{safe_get(rl_sample, 'SiteName', '无')}"
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
 
 
 
