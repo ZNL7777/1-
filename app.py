@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v56.0 RL层级纠正版)",
+    page_title="IATF 审计转换工具 (v57.0 主地址攻克版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -145,7 +145,7 @@ def generate_json_logic(excel_file, base_data):
         if pd.notna(end_dt): next_audit_iso = (end_dt + timedelta(days=45)).strftime('%Y-%m-%d') + "T00:00:00.000Z"
     except: pass
 
-    # [多顾客与 CSR 动态提取：原样保留日期文本]
+    # [多顾客与 CSR 动态提取]
     customers_list = []
     if not info_df.empty:
         header_r = -1
@@ -172,10 +172,6 @@ def generate_json_logic(excel_file, base_data):
                 date_val = str(info_df.iloc[r, col_map['date']]).strip() if col_map['date'] != -1 else ""
                 code_val = str(info_df.iloc[r, col_map['code']]).strip() if col_map['code'] != -1 else ""
                 
-                if name_val.lower() == 'nan': name_val = ""
-                if date_val.lower() == 'nan': date_val = ""
-                if code_val.lower() == 'nan': code_val = ""
-
                 final_date = date_val.replace(" 00:00:00", "").strip()
 
                 customers_list.append({
@@ -277,63 +273,78 @@ def generate_json_logic(excel_file, base_data):
                 }
                 support_sites.append(site_obj)
 
-    # [终极防弹主场所地址扫描]
+    # 💥💥💥 [终极细胞级地址混合剥离扫描] 💥💥💥
     english_address = ""
     native_street = ""
     
-    def get_adjacent_cells(df, keywords):
-        cands = []
-        if df.empty: return cands
+    cands = []
+    # 强制加上数据库中最常规的地址坐标（第10到14行）
+    if not db_df.empty:
+        for r_idx in range(9, 14):
+            if r_idx < db_df.shape[0]:
+                if 1 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 1]))
+                if 4 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 4]))
+                
+    # 雷达寻找所有“地址”字眼及其右侧、下方的单元格（包含自身）
+    def get_anchored(df, keywords):
+        res = []
+        if df.empty: return res
         for r in range(df.shape[0]):
             for c in range(df.shape[1]):
                 val = str(df.iloc[r, c]).strip().upper()
-                for k in keywords:
-                    if k.upper() in val:
-                        if c + 1 < df.shape[1]: cands.append(str(df.iloc[r, c+1]))
-                        if c + 2 < df.shape[1]: cands.append(str(df.iloc[r, c+2]))
-                        if c + 3 < df.shape[1]: cands.append(str(df.iloc[r, c+3]))
-                        if c + 4 < df.shape[1]: cands.append(str(df.iloc[r, c+4]))
-        return [str(x).strip() for x in cands if str(x).strip() and str(x).lower() != 'nan']
+                if any(k in val for k in keywords):
+                    res.append(str(df.iloc[r, c]))  # 把带着表头的自身加进去
+                    if c + 1 < df.shape[1]: res.append(str(df.iloc[r, c+1]))
+                    if c + 2 < df.shape[1]: res.append(str(df.iloc[r, c+2]))
+                    if r + 1 < df.shape[0]: res.append(str(df.iloc[r+1, c]))
+                    if r + 1 < df.shape[0] and c+1 < df.shape[1]: res.append(str(df.iloc[r+1, c+1]))
+        return res
+        
+    cands += get_anchored(info_df, ["审核地址", "AUDIT ADDRESS", "ADDRESS"])
+    cands += get_anchored(db_df, ["地址", "ADDRESS"])
+    
+    en_parts = []
+    zh_parts = []
 
-    raw_cands = get_adjacent_cells(info_df, ["审核地址", "AUDIT ADDRESS", "ADDRESS"]) + \
-                get_adjacent_cells(db_df, ["地址", "ADDRESS"])
-                
-    en_candidates = []
-    zh_candidates = []
-
-    for cand in raw_cands:
+    for cand in cands:
+        cand = str(cand).strip()
+        if not cand or cand.lower() == 'nan': continue
+        
+        # 剥离表头
+        cand = re.sub(r'^(审核地址|组织地址|企业地址|地址|现场地址|AUDIT ADDRESS|ADDRESS)[\s:：]*', '', cand, flags=re.IGNORECASE).strip()
+        if not cand: continue
+        
+        # 切分行（万一用户用了 Alt+Enter）
         lines = cand.replace('\r', '\n').split('\n')
-        en_parts = []
-        zh_parts = []
         for line in lines:
             line = line.strip()
             if not line: continue
-            if re.search(r'[\u4e00-\u9fff]', line):
+            
+            has_zh = bool(re.search(r'[\u4e00-\u9fff]', line))
+            has_en = bool(re.search(r'[a-zA-Z]{3,}', line)) # 至少有3个英文字母
+            
+            # 💥 最强的一步：如果同一行混写了中英文！
+            if has_zh and has_en:
+                # 把中文字符和中文标点全部变为空格，提取纯英文地址
+                en_str = re.sub(r'[\u4e00-\u9fff]', ' ', line)
+                en_str = re.sub(r'[，。；（）]', ' ', en_str) 
+                en_str = re.sub(r'\s+', ' ', en_str).strip(" ()-.,")
+                
+                # 把英文字母去掉，保留纯中文地址
+                zh_str = re.sub(r'[a-zA-Z]', '', line)
+                zh_str = re.sub(r'\s+', ' ', zh_str).strip(" ()-.,")
+                
+                if len(en_str) > 10: en_parts.append(en_str)
+                if len(zh_str) > 5: zh_parts.append(zh_str)
+            elif has_zh:
                 zh_parts.append(line)
-            elif re.search(r'[a-zA-Z]', line):
+            elif has_en:
                 en_parts.append(line)
-        
-        if en_parts: en_candidates.append(" ".join(en_parts))
-        if zh_parts: zh_candidates.append(" ".join(zh_parts))
 
-    english_address = max(en_candidates, key=len) if en_candidates else ""
-    native_street = max(zh_candidates, key=len) if zh_candidates else ""
+    english_address = max(en_parts, key=len) if en_parts else ""
+    native_street = max(zh_parts, key=len) if zh_parts else ""
 
-    if not english_address:
-        for df in [info_df, db_df]:
-            if df.empty: continue
-            for r in range(df.shape[0]):
-                for c in range(df.shape[1]):
-                    val = str(df.iloc[r, c]).strip()
-                    val_upper = val.upper()
-                    if ("PROVINCE" in val_upper or "CITY" in val_upper) and re.search(r'[a-zA-Z]', val):
-                        lines = val.replace('\r', '\n').split('\n')
-                        en_parts = [l.strip() for l in lines if not re.search(r'[\u4e00-\u9fff]', l) and re.search(r'[a-zA-Z]', l)]
-                        if en_parts:
-                            cand = " ".join(en_parts)
-                            if len(cand) > len(english_address):
-                                english_address = cand
-
+    # 倒序切分
     street, city, state, country = english_address, "", "", ""
     if english_address:
         clean_eng = english_address.replace('，', ',')
@@ -357,6 +368,7 @@ def generate_json_logic(excel_file, base_data):
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
     
+    # AuditorName 保持原始未处理文本
     final_json["AuditData"]["AuditorName"] = raw_name
     final_json["AuditData"]["auditorname"] = raw_name
 
@@ -366,7 +378,7 @@ def generate_json_logic(excel_file, base_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": formatted_team_name,
+            "Name": formatted_team_name, # 前端 Name 应用格式化英文名
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
@@ -396,18 +408,22 @@ def generate_json_logic(excel_file, base_data):
             if "0" in lang_node and isinstance(lang_node["0"], dict): lang_node["0"]["Products"] = ""
             else: lang_node["Products"] = ""
     
-    org["AddressNative"].update({
-        "Street1": native_street,
-        "State": "", "City": "", "Country": "中国",
-        "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
-    })
+    # 💥 【修改点】：如果提取成功才写入，防止空字符串覆盖了原 JSON 模板里可能有的内容
+    if native_street:
+        org["AddressNative"]["Street1"] = native_street
+    org["AddressNative"]["Country"] = "中国"
     
-    org["Address"].update({
-        "State": state, "City": city, "Country": country, "Street1": street,
-        "PostalCode": find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
-    })
+    if english_address:
+        org["Address"]["State"] = state
+        org["Address"]["City"] = city
+        org["Address"]["Country"] = country if country else "China"
+        org["Address"]["Street1"] = street
+        
+    postal_code = find_val_by_key(db_df, ["邮政编码"]) or get_db_val(10, 4)
+    if postal_code:
+        org["AddressNative"]["PostalCode"] = postal_code
+        org["Address"]["PostalCode"] = postal_code
 
-    # 💥 【修改点：将支持场所放在根目录级别】
     if support_sites:
         final_json["ProvidingSupportSites"] = support_sites
 
@@ -499,8 +515,8 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v56.0 RL层级纠正版)")
-st.markdown("💡 **修改日志**：已将 `ProvidingSupportSites` 纠正为直接写在根目录层级（与 `OrganizationInformation` 平级），确保完全符合 JSON 底座的标准。")
+st.title("🛡️ 多模板审计转换引擎 (v57.0 主地址彻底攻克版)")
+st.markdown("💡 **修改日志**：加入了**细胞级混排识别逻辑**，现在即便你的中英文地址挤在同一个格子里且不换行，程序也会自动把它们剥离提取！")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -511,20 +527,12 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (支持场所校验)", expanded=True):
-                 try:
-                     rl_sites = res_json.get('ProvidingSupportSites', [])
-                     rl_count = len(rl_sites)
-                     rl_sample = rl_sites[0] if rl_count > 0 else {}
-                 except:
-                     rl_count = 0
-                     rl_sample = {}
-                     
+            with st.expander("👀 查看诊断面板 (地址混排提取校验)", expanded=True):
                  st.code(f"""
-【支持场所 (RL) 根目录提取确认】
-提取数量: {rl_count} 个
-示例名称: "{safe_get(rl_sample, 'SiteName', '无')}"
-示例英文Street1: "{safe_get(rl_sample.get('Address', {}), 'Street1', '无')}"
+【OrganizationInformation 主地址生成确认】
+Street1 (中文):  "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
+Street1 (英文):  "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
+City (英文):     "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'City', '缺失')}"
                  """.strip(), language="yaml")
 
             st.download_button(
@@ -535,6 +543,7 @@ if uploaded_files:
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
 
 
 
