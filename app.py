@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # --- 页面配置 ---
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v57.0 主地址攻克版)",
+    page_title="IATF 审计转换工具 (v58.0 RL名称拼接版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -198,7 +198,7 @@ def generate_json_logic(excel_file, base_data):
                 "DateCSRDocument": csr_date
             })
 
-    # [支持场所 (RL) 动态全量提取与地址切分]
+    # 💥 [支持场所 (RL) 动态全量提取与地址切分]
     support_sites = []
     if not info_df.empty:
         header_r = -1
@@ -229,10 +229,17 @@ def generate_json_logic(excel_file, base_data):
                     return "" if v.lower() == 'nan' else v
 
                 name_cn = safe_get_cell(r, col_map.get('name_cn', -1))
+                # 💥 抓取英文名称
+                name_en = safe_get_cell(r, col_map.get('name_en', -1))
                 addr_cn = safe_get_cell(r, col_map.get('addr_cn', -1))
                 
                 if not name_cn and not addr_cn: continue
                 if "名称" in name_cn and "地址" in addr_cn: continue
+                
+                # 💥 拼接中英文名称
+                full_site_name = name_cn
+                if name_en and name_en not in name_cn:
+                    full_site_name = f"{name_cn}{name_en}"
                     
                 addr_en = safe_get_cell(r, col_map.get('addr_en', -1))
                 zip_code = safe_get_cell(r, col_map.get('zip', -1))
@@ -254,7 +261,7 @@ def generate_json_logic(excel_file, base_data):
 
                 site_obj = {
                     "Id": str(uuid.uuid4()),
-                    "SiteName": name_cn,
+                    "SiteName": full_site_name, # 写入拼接后的名字
                     "Comments": func,
                     "AddressNative": {
                         "Street1": addr_cn,
@@ -273,19 +280,17 @@ def generate_json_logic(excel_file, base_data):
                 }
                 support_sites.append(site_obj)
 
-    # 💥💥💥 [终极细胞级地址混合剥离扫描] 💥💥💥
+    # [终极细胞级地址混合剥离扫描]
     english_address = ""
     native_street = ""
     
     cands = []
-    # 强制加上数据库中最常规的地址坐标（第10到14行）
     if not db_df.empty:
         for r_idx in range(9, 14):
             if r_idx < db_df.shape[0]:
                 if 1 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 1]))
                 if 4 < db_df.shape[1]: cands.append(str(db_df.iloc[r_idx, 4]))
                 
-    # 雷达寻找所有“地址”字眼及其右侧、下方的单元格（包含自身）
     def get_anchored(df, keywords):
         res = []
         if df.empty: return res
@@ -293,7 +298,7 @@ def generate_json_logic(excel_file, base_data):
             for c in range(df.shape[1]):
                 val = str(df.iloc[r, c]).strip().upper()
                 if any(k in val for k in keywords):
-                    res.append(str(df.iloc[r, c]))  # 把带着表头的自身加进去
+                    res.append(str(df.iloc[r, c])) 
                     if c + 1 < df.shape[1]: res.append(str(df.iloc[r, c+1]))
                     if c + 2 < df.shape[1]: res.append(str(df.iloc[r, c+2]))
                     if r + 1 < df.shape[0]: res.append(str(df.iloc[r+1, c]))
@@ -310,27 +315,22 @@ def generate_json_logic(excel_file, base_data):
         cand = str(cand).strip()
         if not cand or cand.lower() == 'nan': continue
         
-        # 剥离表头
         cand = re.sub(r'^(审核地址|组织地址|企业地址|地址|现场地址|AUDIT ADDRESS|ADDRESS)[\s:：]*', '', cand, flags=re.IGNORECASE).strip()
         if not cand: continue
         
-        # 切分行（万一用户用了 Alt+Enter）
         lines = cand.replace('\r', '\n').split('\n')
         for line in lines:
             line = line.strip()
             if not line: continue
             
             has_zh = bool(re.search(r'[\u4e00-\u9fff]', line))
-            has_en = bool(re.search(r'[a-zA-Z]{3,}', line)) # 至少有3个英文字母
+            has_en = bool(re.search(r'[a-zA-Z]{3,}', line)) 
             
-            # 💥 最强的一步：如果同一行混写了中英文！
             if has_zh and has_en:
-                # 把中文字符和中文标点全部变为空格，提取纯英文地址
                 en_str = re.sub(r'[\u4e00-\u9fff]', ' ', line)
                 en_str = re.sub(r'[，。；（）]', ' ', en_str) 
                 en_str = re.sub(r'\s+', ' ', en_str).strip(" ()-.,")
                 
-                # 把英文字母去掉，保留纯中文地址
                 zh_str = re.sub(r'[a-zA-Z]', '', line)
                 zh_str = re.sub(r'\s+', ' ', zh_str).strip(" ()-.,")
                 
@@ -344,7 +344,6 @@ def generate_json_logic(excel_file, base_data):
     english_address = max(en_parts, key=len) if en_parts else ""
     native_street = max(zh_parts, key=len) if zh_parts else ""
 
-    # 倒序切分
     street, city, state, country = english_address, "", "", ""
     if english_address:
         clean_eng = english_address.replace('，', ',')
@@ -368,7 +367,6 @@ def generate_json_logic(excel_file, base_data):
     if end_iso: final_json["AuditData"]["AuditDate"]["End"] = end_iso
     final_json["AuditData"]["CbIdentificationNo"] = find_val_by_key(db_df, ["认证机构标识号"]) or get_db_val(2, 4)
     
-    # AuditorName 保持原始未处理文本
     final_json["AuditData"]["AuditorName"] = raw_name
     final_json["AuditData"]["auditorname"] = raw_name
 
@@ -378,7 +376,7 @@ def generate_json_logic(excel_file, base_data):
     team = final_json["AuditData"]["AuditTeam"][0]
     if isinstance(team, dict):
         team.update({
-            "Name": formatted_team_name, # 前端 Name 应用格式化英文名
+            "Name": formatted_team_name, 
             "CaaNo": caa_no,
             "AuditorId": auditor_id, 
             "AuditDaysPerformed": 1.5,
@@ -408,7 +406,6 @@ def generate_json_logic(excel_file, base_data):
             if "0" in lang_node and isinstance(lang_node["0"], dict): lang_node["0"]["Products"] = ""
             else: lang_node["Products"] = ""
     
-    # 💥 【修改点】：如果提取成功才写入，防止空字符串覆盖了原 JSON 模板里可能有的内容
     if native_street:
         org["AddressNative"]["Street1"] = native_street
     org["AddressNative"]["Country"] = "中国"
@@ -515,8 +512,8 @@ def generate_json_logic(excel_file, base_data):
     return final_json
 
 # ================= 主界面 =================
-st.title("🛡️ 多模板审计转换引擎 (v57.0 主地址彻底攻克版)")
-st.markdown("💡 **修改日志**：加入了**细胞级混排识别逻辑**，现在即便你的中英文地址挤在同一个格子里且不换行，程序也会自动把它们剥离提取！")
+st.title("🛡️ 多模板审计转换引擎 (v58.0 RL名称拼接版)")
+st.markdown("💡 **修改日志**：`ProvidingSupportSites` 下的 `SiteName` 现已支持将中文名与英文名无缝拼接 (例：XXX公司ABC LTD)。")
 
 uploaded_files = st.file_uploader("📥 上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
 
@@ -527,12 +524,19 @@ if uploaded_files:
             res_json = generate_json_logic(file, base_template_data)
             st.success(f"✅ {file.name} 转换成功")
             
-            with st.expander("👀 查看诊断面板 (地址混排提取校验)", expanded=True):
+            with st.expander("👀 查看诊断面板 (支持场所名称校验)", expanded=True):
+                 try:
+                     rl_sites = res_json.get('ProvidingSupportSites', [])
+                     rl_count = len(rl_sites)
+                     rl_sample = rl_sites[0] if rl_count > 0 else {}
+                 except:
+                     rl_count = 0
+                     rl_sample = {}
+                     
                  st.code(f"""
-【OrganizationInformation 主地址生成确认】
-Street1 (中文):  "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
-Street1 (英文):  "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
-City (英文):     "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'City', '缺失')}"
+【支持场所 (RL) 名称拼接确认】
+提取数量: {rl_count} 个
+拼接后 SiteName: "{safe_get(rl_sample, 'SiteName', '无')}"
                  """.strip(), language="yaml")
 
             st.download_button(
@@ -543,6 +547,7 @@ City (英文):     "{safe_get(res_json.get('OrganizationInformation', {}).get('A
             )
         except Exception as e:
             st.error(f"❌ {file.name} 核心处理失败: {str(e)}")
+
 
 
 
