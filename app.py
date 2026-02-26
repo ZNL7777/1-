@@ -16,71 +16,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# =====================================================================
-# UI 强制白底黑字样式注入
-# =====================================================================
+# 仅保留极其轻量的样式控制（让下载按钮填满列宽）
 st.markdown("""
 <style>
-    /* 强制全局白底黑字 */
-    .stApp {
-        background-color: #FFFFFF !important;
-    }
-    
-    /* 侧边栏纯白背景与黑色分割线 */
-    [data-testid="stSidebar"] {
-        background-color: #FFFFFF !important;
-        border-right: 1px solid #000000 !important;
-    }
-    
-    /* 强制所有文本颜色为纯黑 */
-    .stApp p, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label, .stApp li, .stMarkdown {
-        color: #000000 !important;
-    }
-
-    /* 上传框样式：锐利黑框 */
-    [data-testid="stFileUploadDropzone"] {
-        background-color: #FFFFFF !important;
-        border: 1px dashed #000000 !important;
-        border-radius: 0px !important;
-    }
-    
-    /* 按钮样式：白底黑框，悬停黑底白字 */
-    .stButton > button, .stDownloadButton > button {
-        background-color: #FFFFFF !important;
-        color: #000000 !important;
-        border: 1px solid #000000 !important;
-        border-radius: 0px !important;
-        width: 100%;
-        font-weight: bold !important;
-        transition: all 0.2s;
-    }
-    .stButton > button:hover, .stDownloadButton > button:hover {
-        background-color: #000000 !important;
-        color: #FFFFFF !important;
-    }
-
-    /* 扩展面板 (诊断面板) 样式 */
-    [data-testid="stExpander"] {
-        background-color: #FFFFFF !important;
-        border: 1px solid #000000 !important;
-        border-radius: 0px !important;
-    }
-    
-    /* 代码块底色设为极浅的灰色以作区分，文字纯黑 */
-    pre {
-        background-color: #F9F9F9 !important;
-        border: 1px solid #E0E0E0 !important;
-        border-radius: 0px !important;
-    }
-    code {
-        color: #000000 !important;
-        text-shadow: none !important;
-    }
-
-    /* 分割线设为纯黑 */
-    hr {
-        border-bottom-color: #000000 !important;
-    }
+    .stDownloadButton > button { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -88,7 +27,7 @@ st.markdown("""
 # 侧边栏：模板与模式配置
 # =====================================================================
 with st.sidebar:
-    st.markdown("## 配置面板")
+    st.title("配置面板")
     st.divider()
     
     st.markdown("### 1. 提取模式选择")
@@ -627,10 +566,10 @@ def generate_json_logic(excel_file, base_data, mode):
 # 主界面展示区
 # =====================================================================
 
-st.title("IATF 审计数据转换中枢")
-st.markdown(f"**当前执行模式**： `{run_mode}`")
+st.title("数据转换中心")
+st.markdown(f"**运行模式**： `{run_mode}`")
 
-st.markdown("### 📥 数据源输入")
+st.markdown("### 📥 上传数据源")
 uploaded_files = st.file_uploader("支持批量上传 .xlsx 格式文件", type=["xlsx"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -639,7 +578,7 @@ if uploaded_files:
     for file in uploaded_files:
         try:
             res_json = generate_json_logic(file, base_template_data, run_mode)
-            st.success(f"处理完成：{file.name}")
+            st.success(f"解析成功：{file.name}")
             
             row_col1, row_col2 = st.columns([3, 1])
             
@@ -680,15 +619,15 @@ if uploaded_files:
                          """.strip(), language="yaml")
 
             with row_col2:
-                st.write("<br>", unsafe_allow_html=True)
                 st.download_button(
-                    label=f"💾 下载 JSON 文件",
+                    label=f"💾 下载 JSON",
                     data=json.dumps(res_json, indent=2, ensure_ascii=False),
                     file_name=file.name.replace(".xlsx", ".json"),
                     key=f"dl_{file.name}"
                 )
         except Exception as e:
-            st.error(f"处理 {file.name} 失败: {str(e)}")
+            st.error(f"解析 {file.name} 失败: {str(e)}")
+
 
 
 
