@@ -27,10 +27,10 @@ with st.sidebar:
     run_mode = st.radio(
         "请根据报告类型选择：",
         (
-            "纯净标准模式 (无附属场所)", 
-            "单提取：EMS 扩展场所 (F21-M25)", 
-            "单提取：RL 支持场所 (F27-N32)",
-            "全量综合模式 (提取 EMS + RL + 被支持场所)"
+            "纯净标准模式 )", 
+            "EMS 扩展场所 ", 
+            "RL 支持场所",
+            "全"
         ),
         index=0
     )
@@ -727,6 +727,7 @@ if uploaded_files:
                 )
         except Exception as e:
             st.error(f"❌ 解析 {file.name} 失败: {str(e)}")
+
 
 
 
