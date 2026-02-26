@@ -30,7 +30,7 @@ with st.sidebar:
             "纯净标准模式 )", 
             "EMS 扩展场所 ", 
             "RL 支持场所",
-            "全"
+            "全场景（RL+EMS+MS）"
         ),
         index=0
     )
@@ -727,6 +727,7 @@ if uploaded_files:
                 )
         except Exception as e:
             st.error(f"❌ 解析 {file.name} 失败: {str(e)}")
+
 
 
 
