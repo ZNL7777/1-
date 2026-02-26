@@ -11,15 +11,26 @@ from datetime import datetime, timedelta
 # 页面配置
 # =====================================================================
 st.set_page_config(
-    page_title="IATF 审计转换工具",
+    page_title="IATF 审计转换工具 (v66.0)",
     page_icon="🛡️",
     layout="wide"
 )
 
-# 仅保留极其轻量的样式控制（让下载按钮填满列宽）
+# =====================================================================
+# UI 强制白底黑字样式注入
+# =====================================================================
 st.markdown("""
 <style>
-    .stDownloadButton > button { width: 100%; }
+    .stApp { background-color: #FFFFFF !important; }
+    [data-testid="stSidebar"] { background-color: #FFFFFF !important; border-right: 1px solid #000000 !important; }
+    .stApp p, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label, .stApp li, .stMarkdown { color: #000000 !important; }
+    [data-testid="stFileUploadDropzone"] { background-color: #FFFFFF !important; border: 1px dashed #000000 !important; border-radius: 0px !important; }
+    .stButton > button, .stDownloadButton > button { background-color: #FFFFFF !important; color: #000000 !important; border: 1px solid #000000 !important; border-radius: 0px !important; width: 100%; font-weight: bold !important; transition: all 0.2s; }
+    .stButton > button:hover, .stDownloadButton > button:hover { background-color: #000000 !important; color: #FFFFFF !important; }
+    [data-testid="stExpander"] { background-color: #FFFFFF !important; border: 1px solid #000000 !important; border-radius: 0px !important; }
+    pre { background-color: #F9F9F9 !important; border: 1px solid #E0E0E0 !important; border-radius: 0px !important; }
+    code { color: #000000 !important; text-shadow: none !important; }
+    hr { border-bottom-color: #000000 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -27,13 +38,18 @@ st.markdown("""
 # 侧边栏：模板与模式配置
 # =====================================================================
 with st.sidebar:
-    st.title("配置面板")
+    st.markdown("## 配置面板")
     st.divider()
     
     st.markdown("### 1. 提取模式选择")
     run_mode = st.radio(
         "请根据报告类型选择：",
-        ("纯净标准模式", "EMS 扩展场所模式", "RL 支持场所模式 "),
+        (
+            "纯净标准模式 (无附属场所)", 
+            "单提取：EMS 扩展场所 (F21-M25)", 
+            "单提取：RL 支持场所 (F27-N32)",
+            "全量综合模式 (提取 EMS + RL + 被支持场所)"  # 💥 第四模式升级为全量通吃
+        ),
         index=0
     )
     st.divider()
@@ -83,7 +99,7 @@ def extract_and_format_english_name(raw_val):
     return clean_val
 
 # =====================================================================
-# 独立模块 1：EMS 扩展场所提取器
+# 独立模块 1：EMS 扩展场所提取器 (F21:M25)
 # =====================================================================
 def extract_ems_sites(info_df):
     ems_sites = []
@@ -150,18 +166,14 @@ def extract_ems_sites(info_df):
                 "SiteName": full_site_name,
                 "IATF_USI": usi,
                 "TotalNumberEmployees": emp,
-                "AddressNative": {
-                    "Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code
-                },
-                "Address": {
-                    "Street1": ems_street, "City": ems_city, "State": ems_state, "Country": ems_country, "PostalCode": zip_code
-                }
+                "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
+                "Address": {"Street1": ems_street, "City": ems_city, "State": ems_state, "Country": ems_country, "PostalCode": zip_code}
             }
             ems_sites.append(site_obj)
     return ems_sites
 
 # =====================================================================
-# 独立模块 2：RL 支持场所提取器
+# 独立模块 2：RL 支持场所提取器 (F27:N32)
 # =====================================================================
 def extract_rl_sites(info_df):
     support_sites = []
@@ -231,15 +243,90 @@ def extract_rl_sites(info_df):
                 "Comments": func,
                 "IATF_USI": usi,
                 "TotalNumberEmployees": emp,
-                "AddressNative": {
-                    "Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code
-                },
-                "Address": {
-                    "Street1": rl_street, "City": rl_city, "State": rl_state, "Country": rl_country, "PostalCode": zip_code
-                }
+                "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
+                "Address": {"Street1": rl_street, "City": rl_city, "State": rl_state, "Country": rl_country, "PostalCode": zip_code}
             }
             support_sites.append(site_obj)
     return support_sites
+
+# =====================================================================
+# 独立模块 3：被支持场所提取器 (F34:N38)
+# =====================================================================
+def extract_receiving_sites(info_df):
+    receiving_sites = []
+    if info_df.empty: return receiving_sites
+    header_r = -1
+    col_map = {}
+    
+    # 限制搜索边界 F34:N38
+    rec_row_start, rec_row_end = 33, min(38, info_df.shape[0])
+    rec_col_start, rec_col_end = 5, min(14, info_df.shape[1])
+
+    for r in range(rec_row_start, rec_row_end):
+        for c in range(rec_col_start, rec_col_end):
+            val = str(info_df.iloc[r, c]).strip().upper()
+            if "被支持场所信息" in val or "被支持场所" in val:
+                header_r = r
+                for c_scan in range(rec_col_start, rec_col_end):
+                    h_val = str(info_df.iloc[r, c_scan]).strip()
+                    if "中文名称" in h_val: col_map['name_cn'] = c_scan
+                    elif "英文名称" in h_val: col_map['name_en'] = c_scan
+                    elif "中文地址" in h_val: col_map['addr_cn'] = c_scan
+                    elif "英文地址" in h_val: col_map['addr_en'] = c_scan
+                    elif "邮编" in h_val or "邮政编码" in h_val: col_map['zip'] = c_scan
+                    elif "USI" in h_val.upper(): col_map['usi'] = c_scan
+                    elif "人数" in h_val: col_map['emp'] = c_scan
+                    elif "支持功能" in h_val: col_map['func'] = c_scan
+                break
+        if header_r != -1: break
+            
+    if header_r != -1:
+        for r in range(header_r + 1, rec_row_end):
+            def safe_get_cell(row, col_idx):
+                if col_idx == -1 or col_idx >= info_df.shape[1]: return ""
+                v = str(info_df.iloc[row, col_idx]).strip()
+                return "" if v.lower() == 'nan' else v
+
+            name_cn = safe_get_cell(r, col_map.get('name_cn', -1))
+            name_en = safe_get_cell(r, col_map.get('name_en', -1))
+            addr_cn = safe_get_cell(r, col_map.get('addr_cn', -1))
+            
+            if not name_cn and not addr_cn: continue
+            if "名称" in name_cn and "地址" in addr_cn: continue
+            
+            full_site_name = name_cn
+            if name_en and name_en not in name_cn:
+                full_site_name = f"{name_cn} {name_en}".strip()
+
+            addr_en = safe_get_cell(r, col_map.get('addr_en', -1))
+            zip_code = safe_get_cell(r, col_map.get('zip', -1))
+            usi = safe_get_cell(r, col_map.get('usi', -1))
+            emp = safe_get_cell(r, col_map.get('emp', -1))
+            func = safe_get_cell(r, col_map.get('func', -1))
+
+            rec_street, rec_city, rec_state, rec_country = addr_en, "", "", ""
+            if addr_en:
+                clean_eng = addr_en.replace('，', ',')
+                parts = [p.strip() for p in clean_eng.split(',') if p.strip()]
+                if len(parts) >= 3:
+                    rec_country = parts[-1]
+                    rec_state = parts[-2]
+                    rec_city = parts[-3]
+                    rec_street = ", ".join(parts[:-3])
+                else:
+                    rec_street = addr_en
+
+            site_obj = {
+                "Id": str(uuid.uuid4()),
+                "SiteName": full_site_name,
+                "Comments": func,
+                "IATF_USI": usi,
+                "TotalNumberEmployees": emp,
+                "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
+                "Address": {"Street1": rec_street, "City": rec_city, "State": rec_state, "Country": rec_country, "PostalCode": zip_code}
+            }
+            receiving_sites.append(site_obj)
+    return receiving_sites
 
 # =====================================================================
 # 主流程区：核心转换逻辑
@@ -485,21 +572,45 @@ def generate_json_logic(excel_file, base_data, mode):
         org["AddressNative"]["PostalCode"] = postal_code
         org["Address"]["PostalCode"] = postal_code
 
-    # 💥 模式拔插
-    if "EMS" in mode:
+    # =====================================================================
+    # 💥 核心控制分支：根据模式拔插模块
+    # =====================================================================
+    if "全量综合模式" in mode:
+        # 1. 提取 EMS
         ems_sites = extract_ems_sites(info_df)
         if ems_sites:
             final_json["ExtendedManufacturingSites"] = ems_sites
             org["ExtendedManufacturingSite"] = "1"
         else:
             org["ExtendedManufacturingSite"] = "0"
+            
+        # 2. 提取 RL
+        support_sites = extract_rl_sites(info_df)
+        if support_sites:
+            final_json["ProvidingSupportSites"] = support_sites
+            
+        # 3. 提取被支持场所
+        receiving_sites = extract_receiving_sites(info_df)
+        if receiving_sites:
+            final_json["ReceivingSupportSites"] = receiving_sites
+            
+    elif "EMS" in mode:
+        ems_sites = extract_ems_sites(info_df)
+        if ems_sites:
+            final_json["ExtendedManufacturingSites"] = ems_sites
+            org["ExtendedManufacturingSite"] = "1"
+        else:
+            org["ExtendedManufacturingSite"] = "0"
+            
     elif "RL" in mode:
         org["ExtendedManufacturingSite"] = "0"
         support_sites = extract_rl_sites(info_df)
         if support_sites:
             final_json["ProvidingSupportSites"] = support_sites
+            
     else:
         org["ExtendedManufacturingSite"] = "0"
+    # =====================================================================
 
     ensure_path(final_json, ["CustomerInformation"])
     final_json["CustomerInformation"]["Customers"] = []
@@ -584,7 +695,19 @@ if uploaded_files:
             
             with row_col1:
                 with st.expander("查看数据提取日志", expanded=True):
-                     if "EMS" in run_mode:
+                     if "全量综合模式" in run_mode:
+                         ems_count = len(res_json.get('ExtendedManufacturingSites', []))
+                         rl_count = len(res_json.get('ProvidingSupportSites', []))
+                         rec_count = len(res_json.get('ReceivingSupportSites', []))
+                         st.code(f"""
+[模块: 全量综合提取]
+✅ EMS扩展场所提取: {ems_count} 个
+✅ RL支持场所提取 : {rl_count} 个
+✅ 被支持场所提取 : {rec_count} 个
+标志位(EMS): "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
+                         """.strip(), language="yaml")
+                         
+                     elif "EMS" in run_mode:
                          try:
                              ems_sites = res_json.get('ExtendedManufacturingSites', [])
                              ems_count = len(ems_sites)
@@ -619,14 +742,16 @@ if uploaded_files:
                          """.strip(), language="yaml")
 
             with row_col2:
+                st.write("<br>", unsafe_allow_html=True)
                 st.download_button(
-                    label=f"💾 下载 JSON",
+                    label=f"💾 下载 JSON 文件",
                     data=json.dumps(res_json, indent=2, ensure_ascii=False),
                     file_name=file.name.replace(".xlsx", ".json"),
                     key=f"dl_{file.name}"
                 )
         except Exception as e:
             st.error(f"解析 {file.name} 失败: {str(e)}")
+
 
 
 
