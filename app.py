@@ -11,62 +11,44 @@ from datetime import datetime, timedelta
 # 页面配置
 # =====================================================================
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v66.0)",
+    page_title="IATF 审计转换工具 (v67.0 原生 UI 版)",
     page_icon="🛡️",
     layout="wide"
 )
 
 # =====================================================================
-# UI 强制白底黑字样式注入
-# =====================================================================
-st.markdown("""
-<style>
-    .stApp { background-color: #FFFFFF !important; }
-    [data-testid="stSidebar"] { background-color: #FFFFFF !important; border-right: 1px solid #000000 !important; }
-    .stApp p, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label, .stApp li, .stMarkdown { color: #000000 !important; }
-    [data-testid="stFileUploadDropzone"] { background-color: #FFFFFF !important; border: 1px dashed #000000 !important; border-radius: 0px !important; }
-    .stButton > button, .stDownloadButton > button { background-color: #FFFFFF !important; color: #000000 !important; border: 1px solid #000000 !important; border-radius: 0px !important; width: 100%; font-weight: bold !important; transition: all 0.2s; }
-    .stButton > button:hover, .stDownloadButton > button:hover { background-color: #000000 !important; color: #FFFFFF !important; }
-    [data-testid="stExpander"] { background-color: #FFFFFF !important; border: 1px solid #000000 !important; border-radius: 0px !important; }
-    pre { background-color: #F9F9F9 !important; border: 1px solid #E0E0E0 !important; border-radius: 0px !important; }
-    code { color: #000000 !important; text-shadow: none !important; }
-    hr { border-bottom-color: #000000 !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# =====================================================================
 # 侧边栏：模板与模式配置
 # =====================================================================
 with st.sidebar:
-    st.markdown("## 配置面板")
+    st.header("⚙️ 全局配置")
     st.divider()
     
-    st.markdown("### 1. 提取模式选择")
+    st.markdown("### 🔍 提取模式选择")
     run_mode = st.radio(
         "请根据报告类型选择：",
         (
             "纯净标准模式 (无附属场所)", 
             "单提取：EMS 扩展场所 (F21-M25)", 
             "单提取：RL 支持场所 (F27-N32)",
-            "全量综合模式 (提取 EMS + RL + 被支持场所)"  # 💥 第四模式升级为全量通吃
+            "全量综合模式 (提取 EMS + RL + 被支持场所)"
         ),
         index=0
     )
     st.divider()
     
-    st.markdown("### 2. 加载基础模板")
-    user_template_file = st.file_uploader("上传 JSON 底座文件", type=["json"])
+    st.info("💡 请上传您的 JSON 模板。程序将把该文件作为完整的底层骨架。")
+    user_template_file = st.file_uploader("上传基础 JSON 模板", type=["json"])
     
     base_template_data = None
     if user_template_file:
         try:
             base_template_data = json.load(user_template_file)
-            st.success(f"已加载: {user_template_file.name}")
+            st.success(f"✅ 已加载底座: {user_template_file.name}")
         except Exception as e:
-            st.error(f"解析失败: {e}")
+            st.error(f"❌ 解析失败: {e}")
             st.stop()
     else:
-        st.info("请先上传底座文件以启动程序。")
+        st.warning("👈 请先上传底座文件以启动程序。")
         st.stop()
 
 # =====================================================================
@@ -258,7 +240,6 @@ def extract_receiving_sites(info_df):
     header_r = -1
     col_map = {}
     
-    # 限制搜索边界 F34:N38
     rec_row_start, rec_row_end = 33, min(38, info_df.shape[0])
     rec_col_start, rec_col_end = 5, min(14, info_df.shape[1])
 
@@ -576,7 +557,6 @@ def generate_json_logic(excel_file, base_data, mode):
     # 💥 核心控制分支：根据模式拔插模块
     # =====================================================================
     if "全量综合模式" in mode:
-        # 1. 提取 EMS
         ems_sites = extract_ems_sites(info_df)
         if ems_sites:
             final_json["ExtendedManufacturingSites"] = ems_sites
@@ -584,12 +564,10 @@ def generate_json_logic(excel_file, base_data, mode):
         else:
             org["ExtendedManufacturingSite"] = "0"
             
-        # 2. 提取 RL
         support_sites = extract_rl_sites(info_df)
         if support_sites:
             final_json["ProvidingSupportSites"] = support_sites
             
-        # 3. 提取被支持场所
         receiving_sites = extract_receiving_sites(info_df)
         if receiving_sites:
             final_json["ReceivingSupportSites"] = receiving_sites
@@ -610,7 +588,6 @@ def generate_json_logic(excel_file, base_data, mode):
             
     else:
         org["ExtendedManufacturingSite"] = "0"
-    # =====================================================================
 
     ensure_path(final_json, ["CustomerInformation"])
     final_json["CustomerInformation"]["Customers"] = []
@@ -677,8 +654,8 @@ def generate_json_logic(excel_file, base_data, mode):
 # 主界面展示区
 # =====================================================================
 
-st.title("数据转换中心")
-st.markdown(f"**运行模式**： `{run_mode}`")
+st.title("🛡️ 多模板审计转换引擎 (v67.0 原生 UI 恢复版)")
+st.markdown(f"💡 **当前运行模式**: `{run_mode}`")
 
 st.markdown("### 📥 上传数据源")
 uploaded_files = st.file_uploader("支持批量上传 .xlsx 格式文件", type=["xlsx"], accept_multiple_files=True)
@@ -689,12 +666,12 @@ if uploaded_files:
     for file in uploaded_files:
         try:
             res_json = generate_json_logic(file, base_template_data, run_mode)
-            st.success(f"解析成功：{file.name}")
+            st.success(f"✅ 解析成功：{file.name}")
             
             row_col1, row_col2 = st.columns([3, 1])
             
             with row_col1:
-                with st.expander("查看数据提取日志", expanded=True):
+                with st.expander("👀 查看数据提取日志", expanded=True):
                      if "全量综合模式" in run_mode:
                          ems_count = len(res_json.get('ExtendedManufacturingSites', []))
                          rl_count = len(res_json.get('ProvidingSupportSites', []))
@@ -742,15 +719,15 @@ if uploaded_files:
                          """.strip(), language="yaml")
 
             with row_col2:
-                st.write("<br>", unsafe_allow_html=True)
                 st.download_button(
-                    label=f"💾 下载 JSON 文件",
+                    label=f"📥 下载 JSON 文件",
                     data=json.dumps(res_json, indent=2, ensure_ascii=False),
                     file_name=file.name.replace(".xlsx", ".json"),
                     key=f"dl_{file.name}"
                 )
         except Exception as e:
-            st.error(f"解析 {file.name} 失败: {str(e)}")
+            st.error(f"❌ 解析 {file.name} 失败: {str(e)}")
+
 
 
 
