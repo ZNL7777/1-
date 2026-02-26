@@ -11,145 +11,46 @@ from datetime import datetime, timedelta
 # 页面配置
 # =====================================================================
 st.set_page_config(
-    page_title="IATF 审计数据转换中枢",
-    page_icon="✨",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="IATF 审计转换工具",
+    page_icon="🛡️",
+    layout="wide"
 )
 
-# =====================================================================
-# UI 美化 CSS 注入
-# =====================================================================
-def inject_custom_css():
-    st.markdown("""
-    <style>
-    /* 全局背景和字体颜色微调 */
-    .stApp {
-        background-color: #f4f7f6;
-    }
-    
-    /* 侧边栏美化 */
-    [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        box-shadow: 2px 0 12px rgba(0,0,0,0.05);
-        border-right: 1px solid #e0e5e9;
-    }
-    
-    /* 标题渐变色 */
-    h1 {
-        background: -webkit-linear-gradient(45deg, #1e3c72, #2a5298);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        padding-bottom: 10px;
-    }
-    
-    /* 上传组件边框圆角 */
-    [data-testid="stFileUploadDropzone"] {
-        border-radius: 12px;
-        border: 2px dashed #a0b2c6;
-        background-color: #ffffff;
-        transition: all 0.3s ease;
-    }
-    [data-testid="stFileUploadDropzone"]:hover {
-        border-color: #2a5298;
-        background-color: #f8fafe;
-    }
-
-    /* 单选框按钮选项美化 */
-    div[role="radiogroup"] > label {
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: #f8f9fa;
-        margin-bottom: 8px;
-        border: 1px solid #e9ecef;
-        transition: all 0.2s ease;
-    }
-    div[role="radiogroup"] > label:hover {
-        background: #eef2f5;
-        border-color: #cdd6e0;
-    }
-
-    /* 下载按钮极致美化 */
-    .stDownloadButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.6rem 1.5rem;
-        font-weight: 600;
-        letter-spacing: 1px;
-        box-shadow: 0 4px 15px rgba(118, 75, 162, 0.3);
-        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-        width: 100%;
-    }
-    .stDownloadButton > button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 20px rgba(118, 75, 162, 0.4);
-        color: white;
-        border: none;
-    }
-    .stDownloadButton > button:active {
-        transform: translateY(0px);
-    }
-    
-    /* 成功与信息提示框加阴影 */
-    div.stAlert {
-        border-radius: 10px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        border: none;
-    }
-    
-    /* 代码块与扩展面板柔和化 */
-    .streamlit-expanderHeader {
-        background-color: #ffffff;
-        border-radius: 8px;
-        font-weight: 600;
-        color: #2c3e50;
-        border: 1px solid #edf2f7;
-    }
-    [data-testid="stExpander"] {
-        border: none;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.02);
-        background-color: transparent;
-    }
-    pre {
-        border-radius: 8px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-inject_custom_css()
+# 仅保留极其轻量的样式控制（让下载按钮填满列宽）
+st.markdown("""
+<style>
+    .stDownloadButton > button { width: 100%; }
+</style>
+""", unsafe_allow_html=True)
 
 # =====================================================================
 # 侧边栏：模板与模式配置
 # =====================================================================
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/000000/data-configuration.png", width=60)
-    st.title("控制中枢")
+    st.title("配置面板")
+    st.divider()
     
-    st.markdown("### 🧩 选择生成模式")
+    st.markdown("### 1. 提取模式选择")
     run_mode = st.radio(
-        "选择当前任务的提取规则：",
-        ("🟢 纯净标准模式 (无附属场所)", "🏭 EMS 扩展场所模式 (F21-M25)", "🏢 RL 支持场所模式 (F27-N32)"),
+        "请根据报告类型选择：",
+        ("纯净标准模式 (无附属场所)", "EMS 扩展场所模式 (F21-M25)", "RL 支持场所模式 (F27-N32)"),
         index=0
     )
     st.divider()
     
-    st.markdown("### 📄 加载 JSON 底座")
-    st.info("上传标准的骨架文件，程序将以此为基础注入数据。")
-    user_template_file = st.file_uploader("📂 拖拽或点击上传 JSON", type=["json"])
+    st.markdown("### 2. 加载基础模板")
+    user_template_file = st.file_uploader("上传 JSON 底座文件", type=["json"])
     
     base_template_data = None
     if user_template_file:
         try:
             base_template_data = json.load(user_template_file)
-            st.success(f"✅ 底座已就绪: `{user_template_file.name}`")
+            st.success(f"已加载: {user_template_file.name}")
         except Exception as e:
-            st.error(f"❌ 解析失败: {e}")
+            st.error(f"解析失败: {e}")
             st.stop()
     else:
-        st.warning("👈 请先上传 JSON 底座以解锁功能。")
+        st.info("请先上传底座文件以启动程序。")
         st.stop()
 
 # =====================================================================
@@ -665,38 +566,24 @@ def generate_json_logic(excel_file, base_data, mode):
 # 主界面展示区
 # =====================================================================
 
-st.markdown("""
-    <h1>IATF 智能审计转换平台 🚀</h1>
-    <p style="color:#7f8c8d; font-size: 1.1rem; margin-top:-10px;">
-        自动提取 Excel 报告，毫秒级转化为符合工业级标准架构的 JSON 格式
-    </p>
-""", unsafe_allow_html=True)
+st.title("数据转换中心")
+st.markdown(f"**运行模式**： `{run_mode}`")
 
-# 顶部横幅信息
-col1, col2 = st.columns([2, 1])
-with col1:
-    st.info(f"**当前运行模式**：`{run_mode}`\n\n*(如需切换，请在左侧侧边栏更改设置)*")
-
-# 核心上传区
 st.markdown("### 📥 上传数据源")
-uploaded_files = st.file_uploader("支持批量上传 `.xlsx` 格式的审核表格", type=["xlsx"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("支持批量上传 .xlsx 格式文件", type=["xlsx"], accept_multiple_files=True)
 
 if uploaded_files:
     st.divider()
-    st.markdown("### 📊 转换结果与诊断")
     
-    # 使用列布局更好展示结果
     for file in uploaded_files:
         try:
-            with st.spinner(f"正在深度解析 {file.name} ..."):
-                res_json = generate_json_logic(file, base_template_data, run_mode)
-                
-            st.success(f"✅ 解析成功：**{file.name}**")
+            res_json = generate_json_logic(file, base_template_data, run_mode)
+            st.success(f"解析成功：{file.name}")
             
             row_col1, row_col2 = st.columns([3, 1])
             
             with row_col1:
-                with st.expander("🛠️ 查看内部诊断日志 (点击展开)", expanded=True):
+                with st.expander("查看数据提取日志", expanded=True):
                      if "EMS" in run_mode:
                          try:
                              ems_sites = res_json.get('ExtendedManufacturingSites', [])
@@ -705,10 +592,10 @@ if uploaded_files:
                          except:
                              ems_count, ems_sample = 0, {}
                          st.code(f"""
-【模块：EMS 扩展场所 (F21:M25)】
-📌 提取数量: {ems_count} 个
-📌 场所名称: "{safe_get(ems_sample, 'SiteName', '无')}"
-📌 标志位(0/1): "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
+[模块: EMS扩展场所]
+提取数量: {ems_count} 个
+场所名称: "{safe_get(ems_sample, 'SiteName', '无')}"
+标志位: "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
                          """.strip(), language="yaml")
                          
                      elif "RL" in run_mode:
@@ -719,30 +606,28 @@ if uploaded_files:
                          except:
                              rl_count, rl_sample = 0, {}
                          st.code(f"""
-【模块：RL 支持场所 (F27:N32)】
-📌 提取数量: {rl_count} 个
-📌 场所名称: "{safe_get(rl_sample, 'SiteName', '无')}"
+[模块: RL支持场所]
+提取数量: {rl_count} 个
+场所名称: "{safe_get(rl_sample, 'SiteName', '无')}"
                          """.strip(), language="yaml")
                          
                      else:
                          st.code(f"""
-【模块：纯净标准结构】
-📌 中文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
-📌 英文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
+[模块: 纯净标准]
+中文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
+英文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
                          """.strip(), language="yaml")
 
             with row_col2:
-                # 把下载按钮放到卡片右侧
-                st.write("<br>", unsafe_allow_html=True)
                 st.download_button(
-                    label=f"💾 下载 JSON 文件",
+                    label=f"💾 下载 JSON",
                     data=json.dumps(res_json, indent=2, ensure_ascii=False),
                     file_name=file.name.replace(".xlsx", ".json"),
                     key=f"dl_{file.name}"
                 )
         except Exception as e:
-            st.error(f"❌ 解析 {file.name} 失败: {str(e)}")
-            st.info("请检查 Excel 表格结构或确保上传了正确的 JSON 底座。")
+            st.error(f"解析 {file.name} 失败: {str(e)}")
+
 
 
 
