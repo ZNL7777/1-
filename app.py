@@ -33,7 +33,7 @@ with st.sidebar:
     st.markdown("### 1. 提取模式选择")
     run_mode = st.radio(
         "请根据报告类型选择：",
-        ("纯净标准模式 (无附属场所)", "EMS 扩展场所模式 (F21-M25)", "RL 支持场所模式 (F27-N32)"),
+        ("纯净标准模式", "EMS 扩展场所模式", "RL 支持场所模式 "),
         index=0
     )
     st.divider()
@@ -627,6 +627,7 @@ if uploaded_files:
                 )
         except Exception as e:
             st.error(f"解析 {file.name} 失败: {str(e)}")
+
 
 
 
