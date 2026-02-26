@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # 页面配置
 # =====================================================================
 st.set_page_config(
-    page_title="IATF 审计转换工具 (v67.0 原生 UI 版)",
+    page_title="IATF 审计转换工具 (v69.0 文件清单修复版)",
     page_icon="🛡️",
     layout="wide"
 )
@@ -27,10 +27,10 @@ with st.sidebar:
     run_mode = st.radio(
         "请根据报告类型选择：",
         (
-            "纯净标准模式 )", 
-            "EMS 扩展场所 ", 
-            "RL 支持场所",
-            "全场景（RL+EMS+MS）"
+            "纯净标准模式 (无附属场所)", 
+            "单提取：EMS 扩展场所 (F21-M25)", 
+            "单提取：RL 支持场所 (F27-N32)",
+            "全量综合模式 (提取 EMS + RL + 被支持场所)"
         ),
         index=0
     )
@@ -147,6 +147,7 @@ def extract_ems_sites(info_df):
                 "Id": str(uuid.uuid4()),
                 "SiteName": full_site_name,
                 "IATF_USI": usi,
+                "Usi": usi,
                 "TotalNumberEmployees": emp,
                 "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
                 "Address": {"Street1": ems_street, "City": ems_city, "State": ems_state, "Country": ems_country, "PostalCode": zip_code}
@@ -168,7 +169,7 @@ def extract_rl_sites(info_df):
     for r in range(rl_row_start, rl_row_end):
         for c in range(rl_col_start, rl_col_end):
             val = str(info_df.iloc[r, c]).strip().upper()
-            if "被支持场所信息" in val or "RL支持场所" in val or "支持场所信息" in val:
+            if ("支持场所" in val or "RL" in val) and "被" not in val:
                 header_r = r
                 for c_scan in range(rl_col_start, rl_col_end):
                     h_val = str(info_df.iloc[r, c_scan]).strip()
@@ -224,6 +225,7 @@ def extract_rl_sites(info_df):
                 "SiteName": full_site_name,
                 "Comments": func,
                 "IATF_USI": usi,
+                "Usi": usi,
                 "TotalNumberEmployees": emp,
                 "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
                 "Address": {"Street1": rl_street, "City": rl_city, "State": rl_state, "Country": rl_country, "PostalCode": zip_code}
@@ -246,7 +248,7 @@ def extract_receiving_sites(info_df):
     for r in range(rec_row_start, rec_row_end):
         for c in range(rec_col_start, rec_col_end):
             val = str(info_df.iloc[r, c]).strip().upper()
-            if "被支持场所信息" in val or "被支持场所" in val:
+            if "被支持场所" in val:
                 header_r = r
                 for c_scan in range(rec_col_start, rec_col_end):
                     h_val = str(info_df.iloc[r, c_scan]).strip()
@@ -302,6 +304,7 @@ def extract_receiving_sites(info_df):
                 "SiteName": full_site_name,
                 "Comments": func,
                 "IATF_USI": usi,
+                "Usi": usi,
                 "TotalNumberEmployees": emp,
                 "AddressNative": {"Street1": addr_cn, "City": "", "State": "", "Country": "中国", "PostalCode": zip_code},
                 "Address": {"Street1": rec_street, "City": rec_city, "State": rec_state, "Country": rec_country, "PostalCode": zip_code}
@@ -320,7 +323,12 @@ def generate_json_logic(excel_file, base_data, mode):
         db_df = pd.read_excel(xls, sheet_name='数据库', header=None) if '数据库' in xls.sheet_names else pd.read_excel(xls, sheet_name=0, header=None)
         proc_df = pd.read_excel(xls, sheet_name='过程清单') if '过程清单' in xls.sheet_names else pd.DataFrame()
         info_df = pd.read_excel(xls, sheet_name='信息', header=None) if '信息' in xls.sheet_names else pd.DataFrame()
-        doc_list_df = pd.read_excel(xls, sheet_name=xls.sheet_names[8], header=None) if len(xls.sheet_names) >= 9 else pd.DataFrame()
+        
+        # 💥 优化：主动按名字寻找“文件清单”，找不到再用备用逻辑
+        if '文件清单' in xls.sheet_names:
+            doc_list_df = pd.read_excel(xls, sheet_name='文件清单', header=None)
+        else:
+            doc_list_df = pd.read_excel(xls, sheet_name=xls.sheet_names[8], header=None) if len(xls.sheet_names) >= 9 else pd.DataFrame()
     except Exception as e:
         raise ValueError(f"Excel 读取失败: {str(e)}")
 
@@ -554,7 +562,7 @@ def generate_json_logic(excel_file, base_data, mode):
         org["Address"]["PostalCode"] = postal_code
 
     # =====================================================================
-    # 💥 核心控制分支：根据模式拔插模块
+    # 根据模式拔插模块
     # =====================================================================
     if "全量综合模式" in mode:
         ems_sites = extract_ems_sites(info_df)
@@ -599,28 +607,55 @@ def generate_json_logic(excel_file, base_data, mode):
         }
         final_json["CustomerInformation"]["Customers"].append(cust_obj)
 
-    docs_list = []
+    # 💥💥💥 [重构：文件清单精准映射抓取逻辑] 💥💥💥
+    doc_map = {}
     if not doc_list_df.empty:
-        for c in range(doc_list_df.shape[1]):
-            for r in range(doc_list_df.shape[0]):
-                cell_val = str(doc_list_df.iloc[r, c]).strip()
-                if "公司内对应的程序文件" in cell_val or "包含名称、编号、版本" in cell_val:
-                    for r2 in range(r + 1, doc_list_df.shape[0]):
-                        val = str(doc_list_df.iloc[r2, c]).strip()
-                        if val and val.lower() != 'nan': docs_list.append(val)
-                    break
-            if docs_list: break
+        clause_col = -1
+        doc_col = -1
+        header_r = -1
+        # 寻找“条款”列和“名称”列
+        for r in range(min(10, doc_list_df.shape[0])):
+            for c in range(doc_list_df.shape[1]):
+                val = str(doc_list_df.iloc[r, c]).strip()
+                if "条款" in val or "标准条款" in val:
+                    clause_col = c
+                if "公司内对应的程序文件" in val or "包含名称" in val or "文件名称" in val:
+                    doc_col = c
+            if clause_col != -1 and doc_col != -1:
+                header_r = r
+                break
+        
+        if header_r != -1:
+            for r in range(header_r + 1, doc_list_df.shape[0]):
+                clause_val = str(doc_list_df.iloc[r, clause_col]).strip()
+                if not clause_val or clause_val.lower() == 'nan': continue
+                
+                # 仅提取最前面的数字和点 (如 "4.4.1.2产品安全" -> "4.4.1.2")
+                match = re.match(r'^([\d\.]+)', clause_val)
+                if match:
+                    clause_no = match.group(1)
+                    if clause_no.endswith('.'): clause_no = clause_no[:-1]
+                    
+                    doc_parts = []
+                    # 动态合并被分在连续3列里的内容：名称、编号、版本
+                    for dc in range(doc_col, min(doc_col + 3, doc_list_df.shape[1])):
+                        part_val = str(doc_list_df.iloc[r, dc]).strip()
+                        if part_val and part_val.lower() != 'nan':
+                            doc_parts.append(part_val)
+                    
+                    if doc_parts:
+                        # 用空格拼接，更符合阅读习惯
+                        doc_map[clause_no] = " ".join(doc_parts)
 
-    if docs_list:
-        ensure_path(final_json, ["Stage1DocumentedRequirements"])
-        if "IatfClauseDocuments" not in final_json["Stage1DocumentedRequirements"] or not isinstance(final_json["Stage1DocumentedRequirements"]["IatfClauseDocuments"], list):
-            final_json["Stage1DocumentedRequirements"]["IatfClauseDocuments"] = []
+    # 将映射后的文件清单精准注射进 JSON 骨架
+    if doc_map and "Stage1DocumentedRequirements" in final_json and "IatfClauseDocuments" in final_json["Stage1DocumentedRequirements"]:
         clause_docs = final_json["Stage1DocumentedRequirements"]["IatfClauseDocuments"]
-        for i, doc_name in enumerate(docs_list):
-            if i < len(clause_docs):
-                if isinstance(clause_docs[i], dict): clause_docs[i]["DocumentName"] = doc_name
-            else:
-                clause_docs.append({"DocumentName": doc_name})
+        for i in range(len(clause_docs)):
+            if isinstance(clause_docs[i], dict):
+                p_no = str(clause_docs[i].get("ProcessNo", ""))
+                # 如果这个条款号在字典中找到了对应提取出来的文件信息，就更新覆盖
+                if p_no in doc_map:
+                    clause_docs[i]["DocumentName"] = doc_map[p_no]
 
     processes = []
     if not proc_df.empty:
@@ -648,13 +683,14 @@ def generate_json_logic(excel_file, base_data, mode):
     b6_formatted_name = extract_and_format_english_name(b6_raw_val)
     final_json["Results"]["AuditReportFinal"]["AuditorName"] = b6_formatted_name
 
-    return final_json
+    # 附带回传提取到的文件个数以供界面显示
+    return final_json, len(doc_map)
 
 # =====================================================================
 # 主界面展示区
 # =====================================================================
 
-st.title("🛡️ 多模板审计转换引擎 (v67.0 原生 UI 恢复版)")
+st.title("🛡️ 多模板审计转换引擎 (v69.0 文件清单终极修复版)")
 st.markdown(f"💡 **当前运行模式**: `{run_mode}`")
 
 st.markdown("### 📥 上传数据源")
@@ -665,7 +701,7 @@ if uploaded_files:
     
     for file in uploaded_files:
         try:
-            res_json = generate_json_logic(file, base_template_data, run_mode)
+            res_json, mapped_doc_count = generate_json_logic(file, base_template_data, run_mode)
             st.success(f"✅ 解析成功：{file.name}")
             
             row_col1, row_col2 = st.columns([3, 1])
@@ -681,6 +717,7 @@ if uploaded_files:
 ✅ EMS扩展场所提取: {ems_count} 个
 ✅ RL支持场所提取 : {rl_count} 个
 ✅ 被支持场所提取 : {rec_count} 个
+✅ 文件清单精准映射: {mapped_doc_count} 条 (已对应填入JSON)
 标志位(EMS): "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
                          """.strip(), language="yaml")
                          
@@ -695,6 +732,7 @@ if uploaded_files:
 [模块: EMS扩展场所]
 提取数量: {ems_count} 个
 场所名称: "{safe_get(ems_sample, 'SiteName', '无')}"
+文件映射: {mapped_doc_count} 条
 标志位: "{res_json.get('OrganizationInformation', {}).get('ExtendedManufacturingSite', '缺失')}"
                          """.strip(), language="yaml")
                          
@@ -709,13 +747,14 @@ if uploaded_files:
 [模块: RL支持场所]
 提取数量: {rl_count} 个
 场所名称: "{safe_get(rl_sample, 'SiteName', '无')}"
+文件映射: {mapped_doc_count} 条
                          """.strip(), language="yaml")
                          
                      else:
                          st.code(f"""
 [模块: 纯净标准]
 中文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('AddressNative', {}), 'Street1', '缺失')}"
-英文主地址: "{safe_get(res_json.get('OrganizationInformation', {}).get('Address', {}), 'Street1', '缺失')}"
+文件清单映射: {mapped_doc_count} 条目已准确写入
                          """.strip(), language="yaml")
 
             with row_col2:
